@@ -4,3 +4,4 @@ __pycache__/
 memory.json
 output.csv
 output.json
+.pytest_cache/
