@@ -236,10 +236,28 @@ def search_and_extract(
     results: list[ExtractionResult] = []
     seen_urls: set[str] = set()
 
-    # Wikipedia returns 3 articles per call (each a full page), so 3 queries
-    # is enough for solid coverage.  Tavily/DDG return snippets so allow more.
     is_wikipedia = isinstance(tavily, WikipediaSearchClient)
     query_cap = 3 if is_wikipedia else 6
+
+    # For Wikipedia: fetch the entity's own article first (most reliable source).
+    # This gets e.g. the full "תל אביב-יפו" article (with redirect) which
+    # contains the mayor list, official website, and municipality name —
+    # avoiding the problem of search returning tangentially related articles.
+    if is_wikipedia:
+        direct = tavily.fetch_entity_article(entity)
+        for hit in direct.get("results", []):
+            url = hit.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                content = hit.get("raw_content") or hit.get("content", "")
+                if content and len(content) >= 80:
+                    extraction = extract_from_source(
+                        field=field, entity=entity,
+                        source_url=url, source_content=content,
+                        resolved_deps=resolved_deps, client=claude, memory=memory,
+                    )
+                    if extraction.value:
+                        results.append(extraction)
 
     for query in all_queries[:query_cap]:
         try:
@@ -441,6 +459,52 @@ class WikipediaSearchClient:
             print(f"    [wikipedia fetch error] {exc}")
 
         return {"results": results}
+
+    def fetch_entity_article(self, entity: str) -> dict:
+        """
+        Directly fetch the Wikipedia article for `entity` by title.
+        Follows redirects (e.g. 'תל אביב' → 'תל אביב-יפו').
+        Returns a Tavily-compatible results dict.
+        """
+        import urllib.parse
+
+        he_chars = sum(1 for c in entity if 'א' <= c <= 'ת')
+        lang = "he" if he_chars > 0 else "en"
+        base = f"https://{lang}.wikipedia.org/w/api.php"
+
+        params = urllib.parse.urlencode({
+            "action": "query", "prop": "extracts",
+            "titles": entity,
+            "explaintext": 1, "exsectionformat": "plain",
+            "redirects": 1,          # תל אביב → תל אביב-יפו automatically
+            "format": "json", "utf8": 1,
+        })
+        try:
+            data = self._api_get(base, params)
+            pages = data.get("query", {}).get("pages", {})
+            results = []
+            for page in pages.values():
+                if page.get("missing") is not None:
+                    continue
+                title   = page.get("title", entity)
+                extract = page.get("extract", "")
+                if not extract:
+                    continue
+                url = (
+                    f"https://{lang}.wikipedia.org/wiki/"
+                    + urllib.parse.quote(title.replace(" ", "_"))
+                )
+                content = extract[: self._MAX_CONTENT]
+                results.append({
+                    "url": url, "title": title,
+                    "content": content[:400],
+                    "raw_content": content,
+                })
+                print(f"    [direct fetch] '{title}' ({len(extract):,} chars)")
+            return {"results": results}
+        except Exception as exc:
+            print(f"    [direct fetch error] {exc}")
+            return {"results": []}
 
     def _api_get(self, base: str, params: str) -> dict:
         """
