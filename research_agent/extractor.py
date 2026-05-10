@@ -350,3 +350,200 @@ class MockTavilyClient:
             if key != "default" and key in query.lower():
                 return {"results": hits}
         return {"results": self._results.get("default", [])}
+
+
+# ── DuckDuckGo search client (no API key required) ────────────────────────────
+
+class WikipediaSearchClient:
+    """
+    Tavily-compatible client that searches and fetches full article content
+    from Wikipedia (Hebrew-first, English fallback).
+
+    Why Wikipedia instead of DuckDuckGo/Google:
+      - No API key, no rate limits, no IP blocks
+      - Returns full structured article text — ideal for grounding
+      - Hebrew Wikipedia (he.wikipedia.org) has good coverage of Israeli
+        municipalities, politicians, and public figures
+      - The MediaWiki API is stable and officially supported
+
+    Strategy per query:
+      1. Detect language (Hebrew chars → he.wikipedia.org, else en)
+      2. Call the Wikipedia search API to find matching article titles
+      3. Fetch each article's full plaintext via the extracts API
+    """
+
+    _MAX_CONTENT = 6000   # chars per article sent to the extractor
+
+    def search(self, query: str, max_results: int = 3, **kwargs) -> dict:
+        import urllib.request, urllib.parse, json as _json
+
+        # Detect primary language from query characters
+        he_chars = sum(1 for c in query if '֐' <= c <= '׿')
+        lang = "he" if he_chars > 2 else "en"
+        base = f"https://{lang}.wikipedia.org/w/api.php"
+
+        # Step 1: Search for relevant article titles
+        search_params = urllib.parse.urlencode({
+            "action": "query",
+            "list": "search",
+            "srsearch": query,
+            "srlimit": max_results,
+            "format": "json",
+            "utf8": 1,
+        })
+        titles = []
+        try:
+            with urllib.request.urlopen(f"{base}?{search_params}", timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+                titles = [r["title"] for r in data.get("query", {}).get("search", [])]
+        except Exception as exc:
+            print(f"    [wikipedia search error] {exc}")
+            return {"results": []}
+
+        if not titles:
+            return {"results": []}
+
+        # Step 2: Fetch plaintext extracts for each article
+        extract_params = urllib.parse.urlencode({
+            "action": "query",
+            "prop": "extracts",
+            "titles": "|".join(titles),
+            "explaintext": 1,       # plain text, no HTML
+            "exsectionformat": "plain",
+            "format": "json",
+            "utf8": 1,
+        })
+        results = []
+        try:
+            with urllib.request.urlopen(f"{base}?{extract_params}", timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+                pages = data.get("query", {}).get("pages", {})
+                for page in pages.values():
+                    title   = page.get("title", "")
+                    extract = page.get("extract", "")
+                    if not extract:
+                        continue
+                    url = (
+                        f"https://{lang}.wikipedia.org/wiki/"
+                        + urllib.parse.quote(title.replace(" ", "_"))
+                    )
+                    content = extract[: self._MAX_CONTENT]
+                    results.append({
+                        "url":         url,
+                        "title":       title,
+                        "content":     content[:400],   # snippet
+                        "raw_content": content,
+                    })
+        except Exception as exc:
+            print(f"    [wikipedia fetch error] {exc}")
+
+        return {"results": results}
+
+
+class DuckDuckGoClient:
+    """
+    Tavily-compatible client backed by DuckDuckGo (ddgs package).
+    Fetches full page content for better grounding. Falls back to snippet.
+    Note: may rate-limit in server environments — prefer WikipediaSearchClient
+    for research tasks, use DuckDuckGo only when broader web coverage is needed.
+    """
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept-Language": "he,en;q=0.9",
+    }
+    _FETCH_TIMEOUT = 8
+    _MAX_CONTENT = 6000
+
+    def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
+        import urllib.request, time
+
+        raw_hits: list[dict] = []
+        try:
+            from ddgs import DDGS
+            with DDGS() as ddgs:
+                raw_hits = list(ddgs.text(query, max_results=max_results))
+        except ImportError:
+            try:
+                from duckduckgo_search import DDGS
+                with DDGS() as ddgs:
+                    raw_hits = list(ddgs.text(query, max_results=max_results))
+            except Exception as exc:
+                print(f"    [ddg error] {exc}")
+                return {"results": []}
+        except Exception as exc:
+            print(f"    [ddg search error] {exc}")
+            return {"results": []}
+
+        results = []
+        for hit in raw_hits:
+            url     = hit.get("href", "")
+            snippet = hit.get("body", "")
+            title   = hit.get("title", "")
+            raw_content = self._fetch(url) or snippet
+            results.append({"url": url, "title": title,
+                             "content": snippet, "raw_content": raw_content})
+            time.sleep(0.5)   # gentle rate-limit buffer
+
+        return {"results": results}
+
+    def _fetch(self, url: str) -> str | None:
+        import urllib.request
+        if not url.startswith("http"):
+            return None
+        try:
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
+                raw = resp.read()
+                charset = resp.headers.get_content_charset() or "utf-8"
+                try:
+                    html = raw.decode(charset)
+                except (UnicodeDecodeError, LookupError):
+                    try:
+                        html = raw.decode("windows-1255")
+                    except Exception:
+                        html = raw.decode("utf-8", errors="replace")
+                return _strip_html(html)[: self._MAX_CONTENT]
+        except Exception:
+            return None
+
+
+def _strip_html(html: str) -> str:
+    """
+    Extract readable text from HTML using stdlib html.parser.
+    Strips tags, decodes entities, collapses whitespace.
+    """
+    from html.parser import HTMLParser
+
+    class _Stripper(HTMLParser):
+        def __init__(self):
+            super().__init__(convert_charrefs=True)
+            self._buf: list[str] = []
+            self._skip = False
+
+        def handle_starttag(self, tag, attrs):
+            if tag in {"script", "style", "nav", "footer", "header"}:
+                self._skip = True
+
+        def handle_endtag(self, tag):
+            if tag in {"script", "style", "nav", "footer", "header"}:
+                self._skip = False
+
+        def handle_data(self, data):
+            if not self._skip:
+                stripped = data.strip()
+                if stripped:
+                    self._buf.append(stripped)
+
+        def get_text(self) -> str:
+            return "\n".join(self._buf)
+
+    parser = _Stripper()
+    parser.feed(html)
+    text = parser.get_text()
+    # Collapse runs of blank lines
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    return text.strip()
