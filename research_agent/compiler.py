@@ -98,7 +98,7 @@ _PLAN_TOOL = {
                         },
                         "temporal_anchor": {
                             "type": "string",
-                            "description": "Year or date if time-specific, e.g. '1990'. Omit if not applicable."
+                            "description": "Year or date period if the question is time-specific, e.g. '1990' or '1985-1995'. MUST be set for any historical or time-bounded field. Omit only for current/timeless data."
                         },
                         "search_queries_he": {
                             "type": "array",
