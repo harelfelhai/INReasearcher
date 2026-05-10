@@ -28,7 +28,7 @@ import anthropic
 from tavily import TavilyClient
 
 from research_agent.compiler import compile_research_plan
-from research_agent.extractor import search_and_extract
+from research_agent.extractor import search_and_extract, MockTavilyClient
 from research_agent.verifier import verify_field
 from research_agent.output import write_csv, write_json, print_summary
 from research_agent.memory import SuccessMemory
@@ -160,8 +160,12 @@ def research_entity(
     for field in plan.columns:
         _process_field(field)
 
-    # Second pass for deferred fields (simple single-level dependency)
+    # Second pass for deferred fields.
+    # If the dependency field came back NOT_FOUND, fall back to the entity
+    # name so dependent fields can still attempt their own searches.
     for field in list(deferred):
+        if field.depends_on and field.depends_on not in resolved_deps:
+            resolved_deps[field.depends_on] = entity
         _process_field(field)
 
     row_flags = []
@@ -298,6 +302,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Disable memory injection (no few-shot examples)")
     p.add_argument("--review", action="store_true",
                    help="After research completes, interactively review every cell to teach the system")
+    p.add_argument("--mock-search", action="store_true",
+                   help="Use mock Tavily responses (no API key needed) to test the full pipeline")
     p.add_argument("--verbose", "-v", action="store_true")
     return p
 
@@ -322,11 +328,15 @@ def main() -> None:
     tavily_key = os.getenv("TAVILY_API_KEY", "")
     if not anthropic_key:
         sys.exit("ERROR: ANTHROPIC_API_KEY not set. Copy .env.example → .env and add your key.")
-    if not tavily_key and not args.plan_only:
+    if not tavily_key and not args.plan_only and not args.mock_search:
         sys.exit("ERROR: TAVILY_API_KEY not set. Copy .env.example → .env and add your key.")
 
     claude = anthropic.Anthropic(api_key=anthropic_key)
-    tavily = TavilyClient(api_key=tavily_key) if tavily_key else None
+    if args.mock_search:
+        tavily = MockTavilyClient()
+        print("[search] Using MOCK search — no Tavily key required.", file=sys.stderr)
+    else:
+        tavily = TavilyClient(api_key=tavily_key)
 
     # ── Memory ────────────────────────────────────────────────────────────────
     memory = None if args.no_memory else SuccessMemory(args.memory_path)

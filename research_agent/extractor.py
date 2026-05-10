@@ -239,7 +239,6 @@ def search_and_extract(
                 query=query,
                 max_results=3,
                 include_raw_content=True,
-                search_depth="advanced",
             )
         except Exception as exc:
             print(f"    [search error] {query[:60]!r}: {exc}")
@@ -276,3 +275,78 @@ def search_and_extract(
 def _domain(url: str) -> str:
     m = re.search(r'https?://([^/]+)', url)
     return m.group(1) if m else url
+
+
+# ── Mock search layer (for testing without a live Tavily key) ─────────────────
+
+_MOCK_CONTENT_TEL_AVIV = """\
+תל אביב-יפו היא עיר בישראל, הגדולה בישראל מבחינת אוכלוסייה עירונית.
+שלמה להט (צ'יץ') כיהן כראש עיריית תל אביב-יפו בין השנים 1974 ל-1993.
+בשנת 1990 כיהן שלמה להט בתפקיד ראש העיר.
+האתר הרשמי של עיריית תל אביב הוא www.tel-aviv.gov.il.
+תל אביב הוכרזה כעיר בשנת 1950 לאחר איחודה עם יפו.
+"""
+
+_MOCK_CONTENT_HAIFA = """\
+חיפה היא עיר בצפון ישראל הממוקמת על הר הכרמל.
+עריאל שרון ואחרים שימשו בתפקידים שונים בחיפה.
+גוריון ביינארט כיהן כראש עיריית חיפה בתחילת שנות התשעים.
+אריה גוראל היה ראש עיריית חיפה בין השנים 1983 ל-1993.
+בשנת 1990 כיהן אריה גוראל כראש עיריית חיפה.
+האתר הרשמי של עיריית חיפה הוא www.haifa.muni.il.
+"""
+
+_MOCK_RESULTS = {
+    "תל אביב": [
+        {
+            "url": "https://he.wikipedia.org/wiki/תל_אביב-יפו",
+            "title": "תל אביב-יפו — ויקיפדיה",
+            "content": _MOCK_CONTENT_TEL_AVIV,
+            "raw_content": _MOCK_CONTENT_TEL_AVIV,
+        },
+        {
+            "url": "https://www.tel-aviv.gov.il/about",
+            "title": "אודות עיריית תל אביב-יפו",
+            "content": "שלמה להט כיהן כראש עיריית תל אביב בשנת 1990. האתר הרשמי: www.tel-aviv.gov.il",
+            "raw_content": "שלמה להט כיהן כראש עיריית תל אביב בשנת 1990. האתר הרשמי: www.tel-aviv.gov.il",
+        },
+    ],
+    "tel aviv": [
+        {
+            "url": "https://en.wikipedia.org/wiki/Tel_Aviv",
+            "title": "Tel Aviv — Wikipedia",
+            "content": "Shlomo Lahat (Chich) served as mayor of Tel Aviv from 1974 to 1993. In 1990 the mayor was Shlomo Lahat. Official site: www.tel-aviv.gov.il",
+            "raw_content": "Shlomo Lahat (Chich) served as mayor of Tel Aviv from 1974 to 1993. In 1990 the mayor was Shlomo Lahat. Official site: www.tel-aviv.gov.il",
+        }
+    ],
+    "חיפה": [
+        {
+            "url": "https://he.wikipedia.org/wiki/חיפה",
+            "title": "חיפה — ויקיפדיה",
+            "content": _MOCK_CONTENT_HAIFA,
+            "raw_content": _MOCK_CONTENT_HAIFA,
+        }
+    ],
+    "default": [
+        {
+            "url": "https://he.wikipedia.org/wiki/רשימת_ראשי_עיר_בישראל",
+            "title": "רשימת ראשי עיר בישראל — ויקיפדיה",
+            "content": "רשימת ראשי עיר ומועצות מקומיות בישראל לפי שנים. בשנת 1990 כיהנו ראשי עיר שונים ברחבי הארץ.",
+            "raw_content": "רשימת ראשי עיר ומועצות מקומיות בישראל לפי שנים. בשנת 1990 כיהנו ראשי עיר שונים ברחבי הארץ.",
+        }
+    ],
+}
+
+
+class MockTavilyClient:
+    """Drop-in replacement for TavilyClient that returns canned results."""
+
+    def __init__(self, results: dict | None = None):
+        self._results = results or _MOCK_RESULTS
+
+    def search(self, query: str, **kwargs) -> dict:
+        # Return domain-specific mock if available, else default
+        for key, hits in self._results.items():
+            if key != "default" and key in query.lower():
+                return {"results": hits}
+        return {"results": self._results.get("default", [])}
