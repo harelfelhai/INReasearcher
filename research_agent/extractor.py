@@ -110,6 +110,123 @@ ABSOLUTE RULES (violating them destroys data integrity):
    the text says; the verifier weighs source authority across multiple results."""
 
 
+# ── Smart content windowing ───────────────────────────────────────────────────
+
+# Type-specific keywords used to locate relevant passages within long articles.
+# Multilingual: Hebrew is primary for Israeli sources, English for global.
+_TYPE_KEYWORDS: dict[str, list[str]] = {
+    "person_name":   ["ראש העיר", "ראש עיר", "כיהן", "שימש", "נבחר", "מונה",
+                      "mayor", "elected", "served", "appointed", "tenure"],
+    "url":           ["www.", "http", "אתר", "אתר רשמי", ".gov", ".muni",
+                      ".org", ".com", ".il", "website", "official site"],
+    "organization":  ["עיריה", "עיריית", "מועצה", "municipality", "council",
+                      "city hall"],
+    "date":          ["שנת", "בשנת", "תאריך", "year", "date", "established"],
+    "number":        ["אוכלוסייה", "תושבים", "population", "total"],
+}
+
+_INTRO_CHARS   = 1500    # always include the article intro for context
+_WINDOW_RADIUS = 700     # chars on each side of a keyword hit
+_BUDGET        = 15000   # total chars sent to Claude per extraction
+_ELLIPSIS      = "\n\n[...]\n\n"
+
+
+def _select_relevant_text(content: str, field, entity: str) -> str:
+    """
+    For short content (≤ _BUDGET chars) → returns as-is.
+    For long content → returns intro + concatenated windows around every
+    occurrence of field-relevant keywords (entity name, temporal anchor,
+    type-specific terms). Caps at _BUDGET total chars.
+
+    This is what makes the system work on long Wikipedia articles: the
+    Tel Aviv article is 73K chars, but the mayor section is only a few
+    hundred chars hidden deep inside. Sending the first 4K chars missed
+    it entirely; sending all 73K is wasteful. Smart windowing finds it.
+    """
+    if not content:
+        return ""
+    if len(content) <= _BUDGET:
+        return content
+
+    # 1. Build the keyword set for this field
+    keywords: set[str] = {entity}
+    if entity and len(entity) > 2:
+        keywords.add(entity)
+    for word in field.label_he.split() + field.label_en.split():
+        if len(word) > 3:
+            keywords.add(word.lower())
+    if field.temporal_anchor:
+        keywords.add(field.temporal_anchor)
+        # Also include adjacent years — useful for date-range coverage
+        try:
+            yr = int(field.temporal_anchor)
+            for delta in (-3, -2, -1, 1, 2, 3):
+                keywords.add(str(yr + delta))
+        except ValueError:
+            pass
+    keywords.update(_TYPE_KEYWORDS.get(field.type, []))
+
+    # 2. Locate all keyword positions in the content
+    content_lower = content.lower()
+    positions: list[int] = []
+    for kw in keywords:
+        kw_lower = kw.lower()
+        if len(kw_lower) < 2:
+            continue
+        start = 0
+        # Cap matches per keyword to prevent one common word dominating
+        matches_for_kw = 0
+        while matches_for_kw < 20:
+            idx = content_lower.find(kw_lower, start)
+            if idx == -1:
+                break
+            positions.append(idx)
+            start = idx + len(kw_lower)
+            matches_for_kw += 1
+
+    if not positions:
+        # No keyword matches at all → just send the intro
+        return content[:_BUDGET]
+
+    # 3. Build windows around each match position
+    raw_windows = sorted(
+        (max(0, p - _WINDOW_RADIUS), min(len(content), p + _WINDOW_RADIUS))
+        for p in positions
+    )
+
+    # 4. Merge overlapping/adjacent windows
+    merged: list[tuple[int, int]] = [raw_windows[0]]
+    for s, e in raw_windows[1:]:
+        last_s, last_e = merged[-1]
+        if s <= last_e + 50:                    # within 50 chars → merge
+            merged[-1] = (last_s, max(last_e, e))
+        else:
+            merged.append((s, e))
+
+    # 5. Assemble: intro + merged windows, up to budget
+    intro = content[:_INTRO_CHARS]
+    pieces: list[str] = [intro]
+    used = len(intro)
+
+    for s, e in merged:
+        if e <= _INTRO_CHARS:                    # already covered by intro
+            continue
+        if s < _INTRO_CHARS:
+            s = _INTRO_CHARS                     # avoid duplicating intro text
+        section = content[s:e]
+        if used + len(section) + len(_ELLIPSIS) > _BUDGET:
+            remaining = _BUDGET - used - len(_ELLIPSIS)
+            if remaining > 200:
+                pieces.append(_ELLIPSIS)
+                pieces.append(section[:remaining])
+            break
+        pieces.append(_ELLIPSIS)
+        pieces.append(section)
+        used += len(section) + len(_ELLIPSIS)
+
+    return "".join(pieces)
+
+
 def extract_from_source(
     field: ColumnPlan,
     entity: str,
@@ -161,7 +278,7 @@ def extract_from_source(
         f"{examples_block}"
         f"{warnings_block}\n\n"
         f"Source URL: {source_url}\n"
-        f"Source text:\n---\n{source_content[:4000]}\n---\n\n"
+        f"Source text:\n---\n{_select_relevant_text(source_content, field, entity)}\n---\n\n"
         f"Extract '{field.label_en}' for entity '{entity}' from the text above. "
         f"Follow all grounding rules strictly. Return null if not clearly present."
     )
