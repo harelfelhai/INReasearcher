@@ -25,6 +25,11 @@ from tavily import TavilyClient
 
 from .models import ColumnPlan, ExtractionResult
 from .hebrew_utils import is_grounded
+from .memory import (
+    SuccessMemory,
+    format_extraction_examples,
+    format_extraction_warnings,
+)
 
 # ── Extractor tool (structured output enforcement) ────────────────────────────
 
@@ -112,10 +117,15 @@ def extract_from_source(
     source_content: str,
     resolved_deps: dict,
     client: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
 ) -> ExtractionResult:
     """
     Ask Claude to extract one field from one source page.
     Applies the grounding check before accepting the result.
+
+    If `memory` is provided, injects:
+      - up to 2 past validated extractions for this field type (positive few-shot)
+      - up to 5 past hallucinations as AVOID warnings (negative few-shot)
     """
     dep_context = ""
     if field.depends_on and field.depends_on in resolved_deps:
@@ -131,12 +141,22 @@ def extract_from_source(
         if field.temporal_anchor else ""
     )
 
+    examples_block = ""
+    warnings_block = ""
+    if memory is not None:
+        good = memory.get_extraction_examples(field.type, field.label_en, k=2)
+        examples_block = format_extraction_examples(good)
+        bad = memory.get_extraction_warnings(field.type, _domain(source_url))
+        warnings_block = format_extraction_warnings(bad)
+
     user_prompt = (
         f"Entity: {entity}\n"
         f"Field to extract: {field.label_en} / {field.label_he}\n"
         f"Field type: {field.type}"
         f"{temporal_note}"
-        f"{dep_context}\n\n"
+        f"{dep_context}"
+        f"{examples_block}"
+        f"{warnings_block}\n\n"
         f"Source URL: {source_url}\n"
         f"Source text:\n---\n{source_content[:4000]}\n---\n\n"
         f"Extract '{field.label_en}' for entity '{entity}' from the text above. "
@@ -187,6 +207,7 @@ def search_and_extract(
     resolved_deps: dict,
     tavily: TavilyClient,
     claude: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
     max_results: int = 6,
     early_stop_on_high: int = 3,
 ) -> list[ExtractionResult]:
@@ -241,6 +262,7 @@ def search_and_extract(
                 source_content=content,
                 resolved_deps=resolved_deps,
                 client=claude,
+                memory=memory,
             )
 
             if extraction.is_grounded and extraction.value:

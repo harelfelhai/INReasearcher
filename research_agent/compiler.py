@@ -24,6 +24,7 @@ from .models import (
     ClarificationRequest,
     ExecutableResearchPlan,
 )
+from .memory import SuccessMemory, format_compiler_examples
 
 # ── Tool definitions (enforce JSON schema via tool_use) ───────────────────────
 
@@ -267,9 +268,13 @@ def compile_research_plan(
     research_question: str,
     entity_type: str,
     client: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
 ) -> ClarificationRequest | ExecutableResearchPlan:
     """
     Full Stage 0: preflight → plan (or clarification request).
+
+    If `memory` is provided, retrieves up to 3 similar past validated plans
+    and injects them as few-shot examples into the plan-generation prompt.
 
     Returns either:
       ExecutableResearchPlan  — ready for Stage 1
@@ -289,6 +294,12 @@ def compile_research_plan(
             prompt_template=preflight.get("prompt_template", ""),
         )
 
+    # Few-shot: pull similar past validated plans from memory
+    examples_block = ""
+    if memory is not None:
+        past = memory.get_compiler_examples(research_question, entity_type, k=3)
+        examples_block = format_compiler_examples(past)
+
     # Phase B: generate the full plan
     response = client.messages.create(
         model="claude-haiku-4-5-20251001",
@@ -300,7 +311,8 @@ def compile_research_plan(
             "role": "user",
             "content": (
                 f"Research question: {research_question}\n"
-                f"Entity type: {entity_type or 'infer from question'}\n\n"
+                f"Entity type: {entity_type or 'infer from question'}\n"
+                f"{examples_block}\n\n"
                 "Create a detailed extraction plan."
             )
         }]

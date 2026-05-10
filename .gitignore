@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+.env
+memory.json
+output.csv
+output.json

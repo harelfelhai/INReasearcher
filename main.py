@@ -31,6 +31,7 @@ from research_agent.compiler import compile_research_plan
 from research_agent.extractor import search_and_extract
 from research_agent.verifier import verify_field
 from research_agent.output import write_csv, write_json, print_summary
+from research_agent.memory import SuccessMemory
 from research_agent.models import (
     EntityResult,
     ClarificationRequest,
@@ -115,6 +116,7 @@ def research_entity(
     plan: ResearchPlan,
     tavily: TavilyClient,
     claude: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
     verbose: bool = False,
 ) -> EntityResult:
     print(f"\n[entity] {entity}", file=sys.stderr)
@@ -139,6 +141,7 @@ def research_entity(
             resolved_deps=resolved_deps,
             tavily=tavily,
             claude=claude,
+            memory=memory,
         )
         cell = verify_field(field, extractions)
         cells[field.id] = cell
@@ -169,6 +172,107 @@ def research_entity(
     return EntityResult(entity_name=entity, cells=cells, row_flags=row_flags)
 
 
+# ── Interactive Review (Success Memory feedback loop) ────────────────────────
+
+_REVIEW_HELP = """\
+Mark each cell to teach the system:
+  [y] correct        → stored as success (used as few-shot for similar fields)
+  [n] hallucinated   → stored as failure (used as AVOID warning for same domain+type)
+  [s] skip           → no signal recorded
+  [q] quit review    → stop reviewing further cells
+"""
+
+
+def review_results(
+    results: list[EntityResult],
+    plan: ResearchPlan,
+    memory: SuccessMemory,
+    research_question: str,
+) -> None:
+    """
+    Interactive feedback loop. Walks every cell with a value and lets
+    the user validate or flag it. Validated cells are stored in memory
+    and become few-shot examples for future runs. Flagged cells become
+    AVOID warnings for the same field_type + source_domain.
+    """
+    print("\n" + "═" * 66)
+    print("  REVIEW MODE  —  teach the system from your judgement")
+    print("═" * 66)
+    print(_REVIEW_HELP)
+
+    plan_dict = plan.model_dump()
+    field_by_id = {c.id: c for c in plan.columns}
+    plan_validated_for_session = False
+    n_success = n_failure = n_skip = 0
+
+    try:
+        for result in results:
+            for field_id, cell in result.cells.items():
+                if cell.value is None:
+                    continue   # nothing to validate on NOT_FOUND cells
+
+                field = field_by_id[field_id]
+                src = cell.primary_source or {}
+
+                print("─" * 66)
+                print(f"  Entity:     {result.entity_name}")
+                print(f"  Field:      {field.label_he} / {field.label_en}  [{cell.confidence}]")
+                print(f"  Value:      {cell.value}")
+                print(f"  Source:     {src.get('url', '')}")
+                print(f"  Quote:      {(src.get('quote') or '')[:200]}")
+                if cell.flags:
+                    print(f"  Flags:      {', '.join(cell.flags)}")
+
+                choice = input("  [y/n/s/q] > ").strip().lower()
+
+                if choice == "q":
+                    raise KeyboardInterrupt
+                if choice == "y":
+                    memory.record_extraction_success(
+                        field_id=field.id,
+                        field_label=field.label_en,
+                        field_type=field.type,
+                        entity=result.entity_name,
+                        value=cell.value,
+                        quote=src.get("quote", "") or "",
+                        source_url=src.get("url", "") or "",
+                        source_domain=src.get("domain", "") or "",
+                    )
+                    n_success += 1
+                elif choice == "n":
+                    reason = input("  Brief reason (e.g. 'wrong period', 'wrong person'): ").strip()
+                    memory.record_extraction_failure(
+                        field_id=field.id,
+                        field_type=field.type,
+                        entity=result.entity_name,
+                        claimed_value=cell.value,
+                        claimed_quote=src.get("quote"),
+                        source_url=src.get("url", "") or "",
+                        source_domain=src.get("domain", "") or "",
+                        reason=reason or "marked_as_hallucination",
+                    )
+                    n_failure += 1
+                else:
+                    n_skip += 1
+
+                # Once any cell is validated, also record the plan as a success.
+                # The plan is what produced these correct answers.
+                if choice == "y" and not plan_validated_for_session:
+                    memory.record_compiler_success(
+                        research_question=research_question,
+                        entity_type=plan.entity_type,
+                        plan=plan_dict,
+                    )
+                    plan_validated_for_session = True
+    except (KeyboardInterrupt, EOFError):
+        print("\n  Review interrupted.")
+
+    print("\n" + "═" * 66)
+    print(f"  Recorded: {n_success} success(es), {n_failure} failure(s), {n_skip} skipped")
+    print(f"  Memory now contains: {memory.stats()}")
+    print("═" * 66)
+
+
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
 def build_parser() -> argparse.ArgumentParser:
@@ -188,6 +292,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="Compile and print the research plan, then exit")
     p.add_argument("--guide", action="store_true",
                    help="Print prompt guide and exit")
+    p.add_argument("--memory-path", default="memory.json",
+                   help="Path to the success-memory JSON file")
+    p.add_argument("--no-memory", action="store_true",
+                   help="Disable memory injection (no few-shot examples)")
+    p.add_argument("--review", action="store_true",
+                   help="After research completes, interactively review every cell to teach the system")
     p.add_argument("--verbose", "-v", action="store_true")
     return p
 
@@ -218,6 +328,12 @@ def main() -> None:
     claude = anthropic.Anthropic(api_key=anthropic_key)
     tavily = TavilyClient(api_key=tavily_key) if tavily_key else None
 
+    # ── Memory ────────────────────────────────────────────────────────────────
+    memory = None if args.no_memory else SuccessMemory(args.memory_path)
+    if memory:
+        stats = memory.stats()
+        print(f"[memory] Loaded {args.memory_path}: {stats}", file=sys.stderr)
+
     # ── Guided Prompting Loop ─────────────────────────────────────────────────
     question = args.question
     entity_type = args.entity_type
@@ -229,7 +345,7 @@ def main() -> None:
     for attempt in range(1, max_clarification_rounds + 1):
         print(f"\n[compiler] Evaluating research question (attempt {attempt})…", file=sys.stderr)
 
-        result = compile_research_plan(question, entity_type, claude)
+        result = compile_research_plan(question, entity_type, claude, memory=memory)
 
         if isinstance(result, ClarificationRequest):
             refined = _print_clarification(result, interactive)
@@ -263,13 +379,20 @@ def main() -> None:
     # ── Research ──────────────────────────────────────────────────────────────
     results: list[EntityResult] = []
     for entity in entities:
-        row = research_entity(entity, plan, tavily, claude, args.verbose)
+        row = research_entity(entity, plan, tavily, claude, memory, args.verbose)
         results.append(row)
 
     # ── Output ────────────────────────────────────────────────────────────────
     write_csv(results, args.output_csv, plan.columns)
     write_json(results, args.output_json)
     print_summary(results)
+
+    # ── Optional interactive review (Success Memory feedback loop) ───────────
+    if args.review and memory is not None:
+        if not interactive:
+            print("[review] --review requires an interactive TTY; skipped.", file=sys.stderr)
+        else:
+            review_results(results, plan, memory, question)
 
 
 if __name__ == "__main__":
