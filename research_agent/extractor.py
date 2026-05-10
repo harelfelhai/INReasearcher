@@ -372,28 +372,28 @@ class WikipediaSearchClient:
       3. Fetch each article's full plaintext via the extracts API
     """
 
-    _MAX_CONTENT = 6000   # chars per article sent to the extractor
+    _UA = "INResearcher/1.0 (autonomous research agent; github.com/harelfelhai/inreasearcher)"
+    _MAX_CONTENT = 6000
 
     def search(self, query: str, max_results: int = 3, **kwargs) -> dict:
         import urllib.request, urllib.parse, json as _json
 
-        # Detect primary language from query characters
-        he_chars = sum(1 for c in query if '֐' <= c <= '׿')
+        he_chars = sum(1 for c in query if 'א' <= c <= 'ת')
         lang = "he" if he_chars > 2 else "en"
         base = f"https://{lang}.wikipedia.org/w/api.php"
 
-        # Step 1: Search for relevant article titles
         search_params = urllib.parse.urlencode({
-            "action": "query",
-            "list": "search",
-            "srsearch": query,
-            "srlimit": max_results,
-            "format": "json",
-            "utf8": 1,
+            "action": "query", "list": "search",
+            "srsearch": query, "srlimit": max_results,
+            "format": "json", "utf8": 1,
         })
         titles = []
         try:
-            with urllib.request.urlopen(f"{base}?{search_params}", timeout=10) as resp:
+            req = urllib.request.Request(
+                f"{base}?{search_params}",
+                headers={"User-Agent": self._UA}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
                 titles = [r["title"] for r in data.get("query", {}).get("search", [])]
         except Exception as exc:
@@ -403,19 +403,19 @@ class WikipediaSearchClient:
         if not titles:
             return {"results": []}
 
-        # Step 2: Fetch plaintext extracts for each article
         extract_params = urllib.parse.urlencode({
-            "action": "query",
-            "prop": "extracts",
+            "action": "query", "prop": "extracts",
             "titles": "|".join(titles),
-            "explaintext": 1,       # plain text, no HTML
-            "exsectionformat": "plain",
-            "format": "json",
-            "utf8": 1,
+            "explaintext": 1, "exsectionformat": "plain",
+            "format": "json", "utf8": 1,
         })
         results = []
         try:
-            with urllib.request.urlopen(f"{base}?{extract_params}", timeout=10) as resp:
+            req = urllib.request.Request(
+                f"{base}?{extract_params}",
+                headers={"User-Agent": self._UA}
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
                 pages = data.get("query", {}).get("pages", {})
                 for page in pages.values():
@@ -429,9 +429,8 @@ class WikipediaSearchClient:
                     )
                     content = extract[: self._MAX_CONTENT]
                     results.append({
-                        "url":         url,
-                        "title":       title,
-                        "content":     content[:400],   # snippet
+                        "url": url, "title": title,
+                        "content": content[:400],
                         "raw_content": content,
                     })
         except Exception as exc:
