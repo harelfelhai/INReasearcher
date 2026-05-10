@@ -233,7 +233,12 @@ def search_and_extract(
     results: list[ExtractionResult] = []
     seen_urls: set[str] = set()
 
-    for query in all_queries[:6]:    # hard cap: 6 searches per field
+    # Wikipedia returns 3 articles per call (each a full page), so 3 queries
+    # is enough for solid coverage.  Tavily/DDG return snippets so allow more.
+    is_wikipedia = isinstance(tavily, WikipediaSearchClient)
+    query_cap = 3 if is_wikipedia else 6
+
+    for query in all_queries[:query_cap]:
         try:
             response = tavily.search(
                 query=query,
@@ -374,6 +379,7 @@ class WikipediaSearchClient:
 
     _UA = "INResearcher/1.0 (autonomous research agent; github.com/harelfelhai/inreasearcher)"
     _MAX_CONTENT = 6000
+    _RATE_DELAY  = 1.0   # seconds between Wikipedia API calls (rate limit: ~1 req/s)
 
     def search(self, query: str, max_results: int = 3, **kwargs) -> dict:
         import urllib.request, urllib.parse, json as _json
@@ -396,6 +402,7 @@ class WikipediaSearchClient:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
                 titles = [r["title"] for r in data.get("query", {}).get("search", [])]
+            import time; time.sleep(self._RATE_DELAY)
         except Exception as exc:
             print(f"    [wikipedia search error] {exc}")
             return {"results": []}
