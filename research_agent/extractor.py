@@ -136,8 +136,11 @@ def extract_from_source(
         )
 
     temporal_note = (
-        f"\nTEMPORAL CONSTRAINT: Extract information specifically about "
-        f"the year/period '{field.temporal_anchor}'. Ignore data from other periods."
+        f"\nTEMPORAL CONSTRAINT: The answer must be valid for the year/period "
+        f"'{field.temporal_anchor}'. A source stating a date RANGE that includes "
+        f"'{field.temporal_anchor}' (e.g. 'served 1974–1993' covers 1990) IS a valid "
+        f"answer — extract the value. Only return null if the source's dates clearly "
+        f"EXCLUDE '{field.temporal_anchor}', or if no relevant date information exists."
         if field.temporal_anchor else ""
     )
 
@@ -249,7 +252,11 @@ def search_and_extract(
             print(f"    [search error] {query[:60]!r}: {exc}")
             continue
 
-        for hit in response.get("results", []):
+        hits = response.get("results", [])
+        if hits:
+            print(f"    [search] '{query[:55]}' → {len(hits)} result(s): "
+                  + ", ".join(h.get("title", h.get("url","?"))[:30] for h in hits[:3]))
+        for hit in hits:
             url = hit.get("url", "")
             if not url or url in seen_urls:
                 continue
