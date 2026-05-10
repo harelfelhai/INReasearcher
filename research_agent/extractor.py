@@ -379,7 +379,7 @@ class WikipediaSearchClient:
 
     _UA = "INResearcher/1.0 (autonomous research agent; github.com/harelfelhai/inreasearcher)"
     _MAX_CONTENT = 6000
-    _RATE_DELAY  = 1.0   # seconds between Wikipedia API calls (rate limit: ~1 req/s)
+    _RATE_DELAY  = 2.0   # seconds between every Wikipedia API call
 
     def search(self, query: str, max_results: int = 3, **kwargs) -> dict:
         import urllib.request, urllib.parse, json as _json
@@ -393,16 +393,12 @@ class WikipediaSearchClient:
             "srsearch": query, "srlimit": max_results,
             "format": "json", "utf8": 1,
         })
+        import time
+
         titles = []
         try:
-            req = urllib.request.Request(
-                f"{base}?{search_params}",
-                headers={"User-Agent": self._UA}
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode("utf-8"))
-                titles = [r["title"] for r in data.get("query", {}).get("search", [])]
-            import time; time.sleep(self._RATE_DELAY)
+            titles = self._api_get(base, search_params)["query"]["search"]
+            titles = [r["title"] for r in titles]
         except Exception as exc:
             print(f"    [wikipedia search error] {exc}")
             return {"results": []}
@@ -418,32 +414,54 @@ class WikipediaSearchClient:
         })
         results = []
         try:
-            req = urllib.request.Request(
-                f"{base}?{extract_params}",
-                headers={"User-Agent": self._UA}
-            )
-            with urllib.request.urlopen(req, timeout=10) as resp:
-                data = _json.loads(resp.read().decode("utf-8"))
-                pages = data.get("query", {}).get("pages", {})
-                for page in pages.values():
-                    title   = page.get("title", "")
-                    extract = page.get("extract", "")
-                    if not extract:
-                        continue
-                    url = (
-                        f"https://{lang}.wikipedia.org/wiki/"
-                        + urllib.parse.quote(title.replace(" ", "_"))
-                    )
-                    content = extract[: self._MAX_CONTENT]
-                    results.append({
-                        "url": url, "title": title,
-                        "content": content[:400],
-                        "raw_content": content,
-                    })
+            pages = self._api_get(base, extract_params)["query"]["pages"]
+            for page in pages.values():
+                title   = page.get("title", "")
+                extract = page.get("extract", "")
+                if not extract:
+                    continue
+                url = (
+                    f"https://{lang}.wikipedia.org/wiki/"
+                    + urllib.parse.quote(title.replace(" ", "_"))
+                )
+                content = extract[: self._MAX_CONTENT]
+                results.append({
+                    "url": url, "title": title,
+                    "content": content[:400],
+                    "raw_content": content,
+                })
         except Exception as exc:
             print(f"    [wikipedia fetch error] {exc}")
 
         return {"results": results}
+
+    def _api_get(self, base: str, params: str) -> dict:
+        """
+        Make one Wikipedia API call with rate-limiting and a single 429 retry.
+        Sleeps _RATE_DELAY seconds BEFORE and AFTER the call so successive
+        queries within a field don't hammer the endpoint.
+        """
+        import time, urllib.request, json as _json
+
+        time.sleep(self._RATE_DELAY)
+        req = urllib.request.Request(
+            f"{base}?{params}",
+            headers={"User-Agent": self._UA}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            # Retry once after a longer back-off on 429
+            if "429" in str(exc):
+                print(f"    [wikipedia 429 — waiting 10s before retry]")
+                time.sleep(10)
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    data = _json.loads(resp.read().decode("utf-8"))
+            else:
+                raise
+        time.sleep(self._RATE_DELAY)
+        return data
 
 
 class DuckDuckGoClient:
