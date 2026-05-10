@@ -6,8 +6,11 @@ Key design decisions:
     count as one source. This prevents inflated corroboration counts.
   - Normalization before comparison: "יצחק רבין" and "יצחק רבּין" (with dagesh)
     are treated as the same value.
-  - Authoritative domain boost: a single gov.il or he.wikipedia.org source can
-    elevate MEDIUM → HIGH when the claim type warrants it.
+  - Source-agnostic authoritativeness: there is NO global allowlist of "good"
+    domains. The compiler decides per-field which domains are authoritative
+    for THIS query (via ColumnPlan.preferred_source_domains) and the verifier
+    uses that list. A legal-research query trusts court databases; a corporate-
+    research query trusts SEC filings; the system never assumes which.
   - Conflict detection is non-blocking: we surface it as a flag, not an error.
     Researchers need to see "sources disagree" more than they need silence.
 """
@@ -16,16 +19,21 @@ from collections import Counter
 from .models import ColumnPlan, ExtractionResult, VerifiedCell
 from .hebrew_utils import normalize_hebrew
 
-# Domains considered authoritative for Israeli research
-_AUTHORITATIVE = frozenset({
-    "he.wikipedia.org",
-    "knesset.gov.il",
-    "data.gov.il",
-    "gov.il",
-    "nevo.co.il",
-    "takdin.co.il",
-    "archive.org",
-})
+
+def _is_preferred(domain: str, preferred: list[str]) -> bool:
+    """
+    Match a result domain against the compiler's preferred-domain list
+    for this field. Supports suffix matching so 'gov.il' matches
+    'foo.muni.gov.il' and 'sec.gov' matches 'www.sec.gov'.
+    """
+    if not preferred:
+        return False
+    domain = domain.lower().lstrip("www.")
+    for pref in preferred:
+        pref = pref.lower().lstrip("www.")
+        if domain == pref or domain.endswith("." + pref):
+            return True
+    return False
 
 
 def verify_field(
@@ -76,8 +84,10 @@ def verify_field(
         e for d, e in domain_to_extraction.items()
         if domain_to_norm_value[d] == top_norm_value
     ]
+    preferred = field.preferred_source_domains or []
+
     winning_extractions.sort(
-        key=lambda e: (e.source_domain in _AUTHORITATIVE, e.extractor_confidence),
+        key=lambda e: (_is_preferred(e.source_domain, preferred), e.extractor_confidence),
         reverse=True,
     )
     best = winning_extractions[0]
@@ -86,14 +96,14 @@ def verify_field(
     if len(norm_value_counts) > 1:
         flags.append(f"conflict:{len(norm_value_counts)}_distinct_values")
 
-    # Determine confidence
-    has_authoritative = any(
-        d in _AUTHORITATIVE
+    # Per-field authoritativeness: domains the COMPILER chose for this query
+    has_preferred = any(
+        _is_preferred(d, preferred)
         for d, v in domain_to_norm_value.items()
         if v == top_norm_value
     )
 
-    if top_count >= field.min_corroborations and (top_count >= 2 or has_authoritative):
+    if top_count >= field.min_corroborations and (top_count >= 2 or has_preferred):
         confidence = "HIGH"
     elif top_count >= field.min_corroborations:
         confidence = "MEDIUM"
@@ -101,10 +111,11 @@ def verify_field(
         confidence = "LOW"
         flags.append(f"below_min_corroborations:got_{top_count}_need_{field.min_corroborations}")
 
-    # Authoritative boost: single strong source can lift MEDIUM → HIGH
-    if confidence == "MEDIUM" and has_authoritative:
+    # Preferred-source boost: single match against the compiler's chosen
+    # authoritative domains for THIS query can lift MEDIUM → HIGH
+    if confidence == "MEDIUM" and has_preferred:
         confidence = "HIGH"
-        flags.append("authoritative_boost")
+        flags.append("preferred_source_boost")
 
     primary_source = {
         "url": best.source_url,

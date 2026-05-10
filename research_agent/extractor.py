@@ -69,8 +69,13 @@ _EXTRACTOR_TOOL = {
 }
 
 _EXTRACTOR_SYSTEM = """\
-You are a precision data extractor for Israeli research. You read source text and
-extract specific facts — nothing more, nothing less.
+You are a precision data extractor. You read arbitrary source text — from any
+website, in any domain (legal, corporate, academic, governmental, news,
+encyclopedic) — and extract specific facts. Nothing more, nothing less.
+
+You are SOURCE-AGNOSTIC. The text may come from a court ruling, a Wikipedia
+article, a SEC filing, a Hebrew news site, a PDF excerpt, or a personal blog.
+Your job is identical regardless of source structure or domain.
 
 ABSOLUTE RULES (violating them destroys data integrity):
 
@@ -79,9 +84,8 @@ ABSOLUTE RULES (violating them destroys data integrity):
    No background knowledge. No inference. No "it's probably X because...".
 
 2. VERBATIM QUOTE
-   The quote_original field must be a direct copy-paste from the text.
-   If the source is in Hebrew, the quote must be in Hebrew exactly as written.
-   Do NOT translate, summarize, or paraphrase.
+   The quote_original field must be a direct copy-paste from the text — exactly
+   as written, in the original language. Do NOT translate, summarize, or paraphrase.
 
 3. NULL IS CORRECT
    If the information is not clearly in the text, return null for both value
@@ -89,14 +93,16 @@ ABSOLUTE RULES (violating them destroys data integrity):
 
 4. ENTITY SPECIFICITY
    Confirm the text refers to the exact entity named in the question.
-   If the text mentions a different person/place with a similar name, return null.
+   If the text mentions a different person/place/case/company with a similar
+   name, return null.
 
 5. TEMPORAL SPECIFICITY
-   When a year is specified (e.g. "in 1990"), the extracted fact must refer to
-   that period. A source saying "was mayor 1995-2000" does NOT answer "mayor in 1990".
+   When a year or period is specified, the extracted fact must refer to that
+   period. A source saying "served 1995-2000" does NOT answer "served in 1990".
 
-Return the value in whatever language it appears in the source (Hebrew preferred
-for Israeli sources). Do not translate to accommodate the research language."""
+6. SOURCE QUALITY IS NOT YOUR JOB
+   Do not refuse to extract based on perceived source quality. Extract what
+   the text says; the verifier weighs source authority across multiple results."""
 
 
 def extract_from_source(
