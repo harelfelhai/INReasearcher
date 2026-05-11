@@ -1,14 +1,13 @@
 """
-Diagnostic: does _select_relevant_text find the mayor section in the real
-Tel Aviv Wikipedia article?
+Diagnostic: windowing + Wikidata structured data for Tel Aviv.
 
 Run:  py debug_window.py
 """
 import sys
 sys.path.insert(0, ".")
 
-from research_agent.extractor import _select_relevant_text, WikipediaSearchClient
-from research_agent.models import ColumnPlan
+from research_agent.extractor import _select_relevant_text, WikipediaSearchClient, _inject_wikidata
+from research_agent.models import ColumnPlan, ExtractionResult
 
 
 def check(label, text, term):
@@ -74,19 +73,35 @@ def main():
     for term in ["tel-aviv.gov.il", "www.", "http", "אתר"]:
         check("חלון URL", windowed_url, term)
 
-    print("\n=== סיכום ===")
-    print(f"להט במאמר המלא:  {'כן' if 'להט' in content else 'לא'}")
-    print(f"להט בחלון mayor: {'כן' if 'להט' in windowed else 'לא'}")
-    print(f"gov.il בחלון URL: {'כן' if 'gov.il' in windowed_url else 'לא'}")
+    print("\n=== שלב 5: Wikidata — P6 (ראש עיר) ===")
+    wd_results_mayor: list[ExtractionResult] = []
+    field_mayor = ColumnPlan(
+        id="mayor_1990", label_he="ראש העיר בשנת 1990", label_en="Mayor in 1990",
+        type="person_name", temporal_anchor="1990",
+        search_queries_he=[], search_queries_en=[],
+        preferred_source_domains=[], min_corroborations=2,
+    )
+    _inject_wikidata("תל אביב", field_mayor, wd_results_mayor, set())
+    if wd_results_mayor:
+        for r in wd_results_mayor:
+            print(f"  ✓ value={r.value!r}  quote={r.quote_original!r}")
+    else:
+        print("  ✗ Wikidata P6 returned no results for year 1990")
 
-    if "להט" in content and "להט" not in windowed:
-        print("\n⚠  WINDOWING BUG: המאמר מכיל את המידע אבל החלון מפספס אותו")
-        # Show where in the article להט appears vs what the window covers
-        pos = content.find("להט")
-        print(f"   'להט' נמצא בתו {pos:,} מתוך {len(content):,}")
-        print("   החלון כנראה לא מכסה את האזור הזה")
-    elif "להט" in windowed:
-        print("\n✓ WINDOWING OK: החלון מכיל את המידע — הבעיה היא בחילוץ של Claude")
+    print("\n=== שלב 6: Wikidata — P856 (אתר רשמי) ===")
+    wd_results_url: list[ExtractionResult] = []
+    field_url = ColumnPlan(
+        id="official_website", label_he="אתר רשמי", label_en="Official Website URL",
+        type="url", temporal_anchor=None,
+        search_queries_he=[], search_queries_en=[],
+        preferred_source_domains=[], min_corroborations=1,
+    )
+    _inject_wikidata("תל אביב", field_url, wd_results_url, set())
+    if wd_results_url:
+        for r in wd_results_url:
+            print(f"  ✓ value={r.value!r}")
+    else:
+        print("  ✗ Wikidata P856 returned no results")
 
 
 if __name__ == "__main__":

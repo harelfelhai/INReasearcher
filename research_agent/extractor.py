@@ -330,60 +330,136 @@ def extract_from_source(
     )
 
 
-def _inject_wikidata_url(entity: str, results: list, seen_urls: set) -> None:
-    """
-    Query Wikidata for the official website (P856) of `entity`.
-    Wikidata stores structured facts that Wikipedia's plaintext API strips
-    (infobox data like official URLs never appear in explaintext extracts).
-    Injects a synthetic ExtractionResult directly if a URL is found.
-    """
-    import urllib.request, urllib.parse, json as _json, time
+def _wikidata_year(qualifier_list: list) -> int | None:
+    """Extract a year integer from a Wikidata time-qualifier list."""
+    for q in qualifier_list:
+        time_val = q.get("datavalue", {}).get("value", {}).get("time", "")
+        if time_val:
+            try:
+                return int(time_val[1:5])   # "+1974-01-01T..." → 1974
+            except ValueError:
+                pass
+    return None
 
-    UA = WikipediaSearchClient._UA
+
+def _wikidata_fetch(params: dict) -> dict:
+    """Single Wikidata API call with rate-limit sleep."""
+    import urllib.request, urllib.parse, json as _json, time
+    qs = urllib.parse.urlencode({**params, "format": "json", "utf8": 1})
+    req = urllib.request.Request(
+        f"https://www.wikidata.org/w/api.php?{qs}",
+        headers={"User-Agent": WikipediaSearchClient._UA},
+    )
+    time.sleep(1)
+    with urllib.request.urlopen(req, timeout=12) as resp:
+        return _json.loads(resp.read().decode("utf-8"))
+
+
+def _inject_wikidata(entity: str, field, results: list, seen_urls: set) -> None:
+    """
+    Query Wikidata for structured facts that Wikipedia plaintext doesn't carry.
+
+    P856  (official website)    → injected for url fields
+    P6    (head of government)  → injected for person_name fields with a
+                                   temporal_anchor; filters by tenure dates
+    """
     he_chars = sum(1 for c in entity if 'א' <= c <= 'ת')
     site = "hewiki" if he_chars > 0 else "enwiki"
 
-    params = urllib.parse.urlencode({
-        "action": "wbgetentities",
-        "sites": site,
-        "titles": entity,
-        "props": "claims|sitelinks",
-        "format": "json", "utf8": 1,
-    })
     try:
-        time.sleep(1)
-        req = urllib.request.Request(
-            f"https://www.wikidata.org/w/api.php?{params}",
-            headers={"User-Agent": UA}
-        )
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            data = _json.loads(resp.read().decode("utf-8"))
+        # Step 1: resolve entity → Wikidata QID + claims
+        data = _wikidata_fetch({
+            "action": "wbgetentities", "sites": site, "titles": entity,
+            "props": "claims",
+        })
+        wd_entities = data.get("entities", {})
 
-        entities = data.get("entities", {})
-        for qid, ent in entities.items():
+        for qid, ent in wd_entities.items():
             if ent.get("missing"):
                 continue
             claims = ent.get("claims", {})
-            # P856 = official website
-            for claim in claims.get("P856", []):
-                url_val = (
-                    claim.get("mainsnak", {})
-                        .get("datavalue", {})
-                        .get("value")
-                )
-                if url_val and url_val not in seen_urls:
-                    seen_urls.add(url_val)
-                    wikidata_url = f"https://www.wikidata.org/wiki/{qid}"
-                    print(f"    [wikidata] P856 official website: {url_val}")
+            entity_wd_url = f"https://www.wikidata.org/wiki/{qid}"
+
+            # ── P856: official website ────────────────────────────────────
+            if field.type == "url":
+                for claim in claims.get("P856", []):
+                    url_val = (claim.get("mainsnak", {})
+                                    .get("datavalue", {})
+                                    .get("value"))
+                    if url_val and url_val not in seen_urls:
+                        seen_urls.add(url_val)
+                        print(f"    [wikidata] P856 official website: {url_val}")
+                        results.append(ExtractionResult(
+                            field_id=field.id,
+                            value=url_val,
+                            quote_original=(
+                                f"Wikidata {qid} P856 (official website): {url_val}"
+                            ),
+                            source_url=entity_wd_url,
+                            source_domain="www.wikidata.org",
+                            is_grounded=True,
+                            extractor_confidence=0.95,
+                        ))
+
+            # ── P6: head of government (historical mayors etc.) ───────────
+            elif field.type == "person_name" and field.temporal_anchor:
+                try:
+                    target_year = int(field.temporal_anchor)
+                except ValueError:
+                    continue
+
+                person_qids: list[tuple[str, int | None, int | None]] = []
+                for claim in claims.get("P6", []):
+                    person_qid = (claim.get("mainsnak", {})
+                                       .get("datavalue", {})
+                                       .get("value", {})
+                                       .get("id"))
+                    if not person_qid:
+                        continue
+                    quals = claim.get("qualifiers", {})
+                    start = _wikidata_year(quals.get("P580", []))
+                    end   = _wikidata_year(quals.get("P582", []))
+                    # Accept if target year is within [start, end] (None = open)
+                    if (start is None or start <= target_year) and \
+                       (end   is None or end   >= target_year):
+                        person_qids.append((person_qid, start, end))
+
+                if not person_qids:
+                    continue
+
+                # Step 2: resolve person QIDs → Hebrew labels
+                all_qids = [p[0] for p in person_qids]
+                labels_data = _wikidata_fetch({
+                    "action": "wbgetentities",
+                    "ids": "|".join(all_qids),
+                    "props": "labels",
+                    "languages": "he|en",
+                })
+                label_ents = labels_data.get("entities", {})
+
+                for person_qid, start, end in person_qids:
+                    lent   = label_ents.get(person_qid, {}).get("labels", {})
+                    name   = (lent.get("he", {}).get("value") or
+                              lent.get("en", {}).get("value", person_qid))
+                    tenure = (f"{start}–{end}" if start and end
+                              else f"from {start}" if start
+                              else f"until {end}" if end
+                              else "unknown tenure")
+                    print(f"    [wikidata] P6 head of government "
+                          f"in {target_year}: {name} ({tenure})")
                     results.append(ExtractionResult(
-                        field_id="",          # filled by caller
-                        value=url_val,
-                        quote_original=f"Wikidata P856 (official website) for {entity}: {url_val}",
-                        source_url=wikidata_url,
+                        field_id=field.id,
+                        value=name,
+                        quote_original=(
+                            f"Wikidata {qid} P6 (head of government): "
+                            f"{name}, tenure {tenure}, covers {target_year}"
+                        ),
+                        source_url=f"https://www.wikidata.org/wiki/{person_qid}",
                         source_domain="www.wikidata.org",
                         is_grounded=True,
                         extractor_confidence=0.95,
                     ))
+
     except Exception as exc:
         print(f"    [wikidata error] {exc}")
 
@@ -431,11 +507,8 @@ def search_and_extract(
         extra = []
         if field.type == "person_name" and field.temporal_anchor:
             extra.append(f"ראשי עיר {entity}")
-        if field.type == "url":
-            _inject_wikidata_url(entity, results, seen_urls)
-            for r in results:
-                if r.field_id == "":
-                    r.field_id = field.id
+        if field.type in ("url", "person_name"):
+            _inject_wikidata(entity, field, results, seen_urls)
 
         direct = tavily.fetch_entity_article(entity, extra_titles=extra)
         for hit in direct.get("results", []):
