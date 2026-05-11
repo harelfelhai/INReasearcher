@@ -879,6 +879,94 @@ class DuckDuckGoClient:
             return None
 
 
+class GoogleSearchClient:
+    """
+    Tavily-compatible client backed by Google Custom Search JSON API.
+    Fetches full page content for each result (same approach as DuckDuckGoClient).
+
+    Free tier: 100 queries/day.  Paid: $5 per 1,000 queries.
+
+    Setup (one-time):
+      1. console.cloud.google.com → New project → Enable "Custom Search API"
+      2. APIs & Services → Credentials → Create API key  → set as GOOGLE_API_KEY
+      3. programmablesearchengine.google.com → New engine → "Search the entire web"
+         → copy the cx value                              → set as GOOGLE_CSE_ID
+      4. Add both to your .env file
+
+    Why Google over Wikipedia for historical political data:
+      - Finds news archives, government PDFs, and niche Hebrew sites that
+        Wikipedia/Wikidata don't index as structured data.
+      - Returns the actual pages; _select_relevant_text handles the windowing.
+    """
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept-Language": "he,en;q=0.9",
+    }
+    _FETCH_TIMEOUT = 10
+    _MAX_CONTENT   = 8000
+
+    def __init__(self, api_key: str, cse_id: str):
+        self.api_key = api_key
+        self.cse_id  = cse_id
+
+    def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
+        import urllib.request, urllib.parse, json as _json
+
+        params = urllib.parse.urlencode({
+            "key": self.api_key,
+            "cx":  self.cse_id,
+            "q":   query,
+            "num": min(max_results, 10),
+            "lr":  "lang_he",   # prefer Hebrew-language results
+        })
+        try:
+            req = urllib.request.Request(
+                f"https://www.googleapis.com/customsearch/v1?{params}",
+                headers={"User-Agent": self._HEADERS["User-Agent"]},
+            )
+            with urllib.request.urlopen(req, timeout=10) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            print(f"    [google search error] {exc}")
+            return {"results": []}
+
+        results = []
+        for item in data.get("items", []):
+            url     = item.get("link", "")
+            title   = item.get("title", "")
+            snippet = item.get("snippet", "")
+            raw_content = self._fetch(url) or snippet
+            results.append({
+                "url": url, "title": title,
+                "content": snippet, "raw_content": raw_content,
+            })
+        return {"results": results}
+
+    def _fetch(self, url: str) -> str | None:
+        import urllib.request
+        if not url.startswith("http"):
+            return None
+        try:
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
+                raw = resp.read()
+                charset = resp.headers.get_content_charset() or "utf-8"
+                try:
+                    html = raw.decode(charset)
+                except (UnicodeDecodeError, LookupError):
+                    try:
+                        html = raw.decode("windows-1255")
+                    except Exception:
+                        html = raw.decode("utf-8", errors="replace")
+                return _strip_html(html)[: self._MAX_CONTENT]
+        except Exception:
+            return None
+
+
 def _strip_html(html: str) -> str:
     """
     Extract readable text from HTML using stdlib html.parser.

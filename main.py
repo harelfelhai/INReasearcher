@@ -29,7 +29,8 @@ from tavily import TavilyClient
 
 from research_agent.compiler import compile_research_plan
 from research_agent.extractor import (
-    search_and_extract, MockTavilyClient, DuckDuckGoClient, WikipediaSearchClient,
+    search_and_extract, MockTavilyClient, DuckDuckGoClient,
+    WikipediaSearchClient, GoogleSearchClient,
 )
 from research_agent.verifier import verify_field
 from research_agent.output import write_csv, write_json, print_summary
@@ -306,7 +307,7 @@ def build_parser() -> argparse.ArgumentParser:
                    help="After research completes, interactively review every cell to teach the system")
     p.add_argument("--mock-search", action="store_true",
                    help="Use mock search responses (no API key needed) to test the full pipeline")
-    p.add_argument("--search-engine", choices=["tavily", "duckduckgo", "wikipedia"],
+    p.add_argument("--search-engine", choices=["tavily", "duckduckgo", "wikipedia", "google"],
                    default="wikipedia",
                    help="Search backend (default: wikipedia — no API key needed)")
     p.add_argument("--verbose", "-v", action="store_true")
@@ -345,6 +346,18 @@ def main() -> None:
     elif args.search_engine == "duckduckgo":
         search = DuckDuckGoClient()
         print("[search] Using DuckDuckGo (no API key required).", file=sys.stderr)
+    elif args.search_engine == "google":
+        google_key = os.getenv("GOOGLE_API_KEY", "")
+        google_cse  = os.getenv("GOOGLE_CSE_ID", "")
+        if not google_key or not google_cse:
+            sys.exit(
+                "ERROR: GOOGLE_API_KEY and GOOGLE_CSE_ID must be set in .env\n"
+                "  1. console.cloud.google.com → Enable 'Custom Search API' → Create API key\n"
+                "  2. programmablesearchengine.google.com → New engine → copy cx value\n"
+                "  3. Add both to .env:  GOOGLE_API_KEY=...  GOOGLE_CSE_ID=..."
+            )
+        search = GoogleSearchClient(api_key=google_key, cse_id=google_cse)
+        print("[search] Using Google Custom Search API.", file=sys.stderr)
     else:
         if not tavily_key and not args.plan_only:
             sys.exit("ERROR: TAVILY_API_KEY not set. Use --search-engine wikipedia or add your Tavily key.")
