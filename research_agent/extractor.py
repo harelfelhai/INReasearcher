@@ -508,7 +508,12 @@ def search_and_extract(
         if field.type == "person_name" and field.temporal_anchor:
             extra.append(f"ראשי עיר {entity}")
         if field.type in ("url", "person_name"):
-            _inject_wikidata(entity, field, results, seen_urls)
+            # Use the canonical Wikipedia title (post-redirect) for Wikidata lookup,
+            # because Wikidata sitelinks use canonical titles not redirect aliases.
+            # e.g. "תל אביב" → Wikidata: not found; "תל אביב-יפו" → Q33935: found
+            canonical = (direct["results"][0]["title"]
+                         if direct.get("results") else entity)
+            _inject_wikidata(canonical, field, results, seen_urls)
 
         direct = tavily.fetch_entity_article(entity, extra_titles=extra)
         for hit in direct.get("results", []):

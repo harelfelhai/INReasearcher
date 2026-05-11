@@ -73,6 +73,10 @@ def main():
     for term in ["tel-aviv.gov.il", "www.", "http", "אתר"]:
         check("חלון URL", windowed_url, term)
 
+    # Use canonical title (post-redirect) — same as search_and_extract now does
+    canonical_title = hits[0]["title"]
+    print(f"\nCanonical Wikipedia title: {canonical_title!r}")
+
     print("\n=== שלב 5: Wikidata — P6 (ראש עיר) ===")
     wd_results_mayor: list[ExtractionResult] = []
     field_mayor = ColumnPlan(
@@ -81,12 +85,13 @@ def main():
         search_queries_he=[], search_queries_en=[],
         preferred_source_domains=[], min_corroborations=2,
     )
-    _inject_wikidata("תל אביב", field_mayor, wd_results_mayor, set())
+    _inject_wikidata(canonical_title, field_mayor, wd_results_mayor, set())
     if wd_results_mayor:
         for r in wd_results_mayor:
             print(f"  ✓ value={r.value!r}  quote={r.quote_original!r}")
     else:
         print("  ✗ Wikidata P6 returned no results for year 1990")
+        print("    (Wikidata may not have historical P6 data for this entity)")
 
     print("\n=== שלב 6: Wikidata — P856 (אתר רשמי) ===")
     wd_results_url: list[ExtractionResult] = []
@@ -96,7 +101,7 @@ def main():
         search_queries_he=[], search_queries_en=[],
         preferred_source_domains=[], min_corroborations=1,
     )
-    _inject_wikidata("תל אביב", field_url, wd_results_url, set())
+    _inject_wikidata(canonical_title, field_url, wd_results_url, set())
     if wd_results_url:
         for r in wd_results_url:
             print(f"  ✓ value={r.value!r}")
