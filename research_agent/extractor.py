@@ -921,7 +921,7 @@ class GoogleSearchClient:
             "cx":  self.cse_id,
             "q":   query,
             "num": min(max_results, 10),
-            "lr":  "lang_he",   # prefer Hebrew-language results
+            "lr":  "lang_iw",   # Hebrew (Google uses old ISO code "iw", not "he")
         })
         try:
             req = urllib.request.Request(
@@ -931,7 +931,17 @@ class GoogleSearchClient:
             with urllib.request.urlopen(req, timeout=10) as resp:
                 data = _json.loads(resp.read().decode("utf-8"))
         except Exception as exc:
-            print(f"    [google search error] {exc}")
+            # Print response body if available (helps diagnose 400/403 errors)
+            body = getattr(exc, "read", lambda: b"")()
+            if body:
+                try:
+                    err = _json.loads(body)
+                    msg = err.get("error", {}).get("message", str(exc))
+                except Exception:
+                    msg = str(exc)
+            else:
+                msg = str(exc)
+            print(f"    [google search error] {msg}")
             return {"results": []}
 
         results = []
