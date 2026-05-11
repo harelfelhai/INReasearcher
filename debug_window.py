@@ -104,5 +104,39 @@ def main():
         print("  ✗ Wikidata P856 returned no results")
 
 
+def debug_wikidata_raw():
+    """Print raw Wikidata API response to diagnose lookup failures."""
+    import urllib.request, urllib.parse, json as _json, time
+
+    UA = WikipediaSearchClient._UA
+
+    for title in ["תל אביב", "תל אביב-יפו"]:
+        params = urllib.parse.urlencode({
+            "action": "wbgetentities", "sites": "hewiki", "titles": title,
+            "props": "claims", "format": "json", "utf8": 1,
+        })
+        time.sleep(1)
+        req = urllib.request.Request(
+            f"https://www.wikidata.org/w/api.php?{params}",
+            headers={"User-Agent": UA},
+        )
+        print(f"\n=== Wikidata raw: '{title}' ===")
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+            for qid, ent in data.get("entities", {}).items():
+                print(f"  QID: {qid}  missing={ent.get('missing', False)}")
+                claims = ent.get("claims", {})
+                print(f"  P6  claims: {len(claims.get('P6', []))}")
+                print(f"  P856 claims: {len(claims.get('P856', []))}")
+                # Show first P6 claim raw
+                for i, c in enumerate(claims.get("P6", [])[:2]):
+                    print(f"  P6[{i}] mainsnak: {c.get('mainsnak',{}).get('datavalue')}")
+                    print(f"  P6[{i}] qualifiers: {list(c.get('qualifiers',{}).keys())}")
+        except Exception as e:
+            print(f"  ERROR: {e}")
+
+
 if __name__ == "__main__":
     main()
+    debug_wikidata_raw()
