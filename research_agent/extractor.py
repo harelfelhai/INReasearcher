@@ -921,7 +921,6 @@ class GoogleSearchClient:
             "cx":  self.cse_id,
             "q":   query,
             "num": min(max_results, 10),
-            "lr":  "lang_iw",   # Hebrew (Google uses old ISO code "iw", not "he")
         })
         try:
             req = urllib.request.Request(
