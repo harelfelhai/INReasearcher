@@ -224,7 +224,14 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
         pieces.append(section)
         used += len(section) + len(_ELLIPSIS)
 
-    return "".join(pieces)
+    result = "".join(pieces)
+    # Debug: show windowing stats (entity name truncated for readability)
+    entity_short = entity[:20]
+    hit_kws = [kw for kw in keywords if kw.lower() in content_lower and len(kw) > 2][:5]
+    print(f"    [window] {entity_short!r} field={field.id!r}: "
+          f"{len(content):,}→{len(result):,} chars, "
+          f"matched keywords: {hit_kws}")
+    return result
 
 
 def extract_from_source(
@@ -520,7 +527,6 @@ class WikipediaSearchClient:
     """
 
     _UA = "INResearcher/1.0 (autonomous research agent; github.com/harelfelhai/inreasearcher)"
-    _MAX_CONTENT = 6000
     _RATE_DELAY  = 2.0   # seconds between every Wikipedia API call
 
     def search(self, query: str, max_results: int = 3, **kwargs) -> dict:
@@ -566,11 +572,10 @@ class WikipediaSearchClient:
                     f"https://{lang}.wikipedia.org/wiki/"
                     + urllib.parse.quote(title.replace(" ", "_"))
                 )
-                content = extract[: self._MAX_CONTENT]
                 results.append({
                     "url": url, "title": title,
-                    "content": content[:400],
-                    "raw_content": content,
+                    "content": extract[:400],
+                    "raw_content": extract,   # full text — windowing done by _select_relevant_text
                 })
         except Exception as exc:
             print(f"    [wikipedia fetch error] {exc}")
@@ -611,11 +616,10 @@ class WikipediaSearchClient:
                     f"https://{lang}.wikipedia.org/wiki/"
                     + urllib.parse.quote(title.replace(" ", "_"))
                 )
-                content = extract[: self._MAX_CONTENT]
                 results.append({
                     "url": url, "title": title,
-                    "content": content[:400],
-                    "raw_content": content,
+                    "content": extract[:400],
+                    "raw_content": extract,   # full text — windowing done by _select_relevant_text
                 })
                 print(f"    [direct fetch] '{title}' ({len(extract):,} chars)")
             return {"results": results}
