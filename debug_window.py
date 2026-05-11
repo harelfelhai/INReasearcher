@@ -37,7 +37,7 @@ def main():
     for term in ["להט", "שלמה להט", "1990", "ראש העיר", "tel-aviv.gov.il", "www."]:
         check("מאמר מלא", content, term)
 
-    print("\n=== שלב 3: חלון mayor_1990 ===")
+    print("\n=== שלב 3: חלון mayor_1990 (מאמר ראשי) ===")
     field = ColumnPlan(
         id="mayor_1990", label_he="ראש העיר בשנת 1990", label_en="Mayor in 1990",
         type="person_name", temporal_anchor="1990",
@@ -49,6 +49,17 @@ def main():
 
     for term in ["להט", "שלמה להט", "1990", "ראש העיר"]:
         check("חלון", windowed, term)
+
+    print("\n=== שלב 3b: מאמר ראשי עיר תל אביב-יפו (ייעודי) ===")
+    result2 = client.fetch_entity_article("תל אביב", extra_titles=["ראשי עיר תל אביב-יפו"])
+    mayors_article = next((h["raw_content"] for h in result2.get("results", [])
+                           if "ראשי עיר" in h.get("title", "")), None)
+    if mayors_article:
+        print(f"אורך מאמר ראשי עיר: {len(mayors_article):,} תווים")
+        for term in ["להט", "שלמה להט", "1990", "1974", "1993"]:
+            check("מאמר ראשי עיר", mayors_article, term)
+    else:
+        print("  מאמר 'ראשי עיר תל אביב-יפו' לא נמצא בוויקיפדיה")
 
     print("\n=== שלב 4: חלון official_website ===")
     field_url = ColumnPlan(

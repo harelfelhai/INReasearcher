@@ -126,7 +126,8 @@ _TYPE_KEYWORDS: dict[str, list[str]] = {
 }
 
 _INTRO_CHARS   = 1500    # always include the article intro for context
-_WINDOW_RADIUS = 700     # chars on each side of a keyword hit
+_CHUNK_SIZE    = 1400    # size of scored chunks for density windowing
+_CHUNK_STEP    = 350     # step between chunks (overlapping)
 _BUDGET        = 15000   # total chars sent to Claude per extraction
 _ELLIPSIS      = "\n\n[...]\n\n"
 
@@ -134,22 +135,24 @@ _ELLIPSIS      = "\n\n[...]\n\n"
 def _select_relevant_text(content: str, field, entity: str) -> str:
     """
     For short content (≤ _BUDGET chars) → returns as-is.
-    For long content → returns intro + concatenated windows around every
-    occurrence of field-relevant keywords (entity name, temporal anchor,
-    type-specific terms). Caps at _BUDGET total chars.
+    For long content → density-scored windowing:
+      1. Divide the article into overlapping chunks
+      2. Score each chunk by how many DISTINCT field-relevant keywords appear in it
+      3. Take the highest-scoring chunks (most relevant sections) until budget is full
+      4. Always prepend the article intro for context
 
-    This is what makes the system work on long Wikipedia articles: the
-    Tel Aviv article is 73K chars, but the mayor section is only a few
-    hundred chars hidden deep inside. Sending the first 4K chars missed
-    it entirely; sending all 73K is wasteful. Smart windowing finds it.
+    Density scoring beats naive per-hit windowing because common words like
+    'ראש העיר' appear hundreds of times and would fill the budget with irrelevant
+    passages. A chunk containing role + year + name scores higher than one that
+    only contains the role keyword once.
     """
     if not content:
         return ""
     if len(content) <= _BUDGET:
         return content
 
-    # 1. Build the keyword set for this field
-    keywords: set[str] = {entity}
+    # 1. Build keyword set
+    keywords: set[str] = set()
     if entity and len(entity) > 2:
         keywords.add(entity)
     for word in field.label_he.split() + field.label_en.split():
@@ -157,7 +160,6 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
             keywords.add(word.lower())
     if field.temporal_anchor:
         keywords.add(field.temporal_anchor)
-        # Also include adjacent years — useful for date-range coverage
         try:
             yr = int(field.temporal_anchor)
             for delta in (-3, -2, -1, 1, 2, 3):
@@ -165,72 +167,72 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
         except ValueError:
             pass
     keywords.update(_TYPE_KEYWORDS.get(field.type, []))
+    kw_list = [kw.lower() for kw in keywords if len(kw) >= 2]
 
-    # 2. Locate all keyword positions in the content
     content_lower = content.lower()
-    positions: list[int] = []
-    for kw in keywords:
-        kw_lower = kw.lower()
-        if len(kw_lower) < 2:
-            continue
-        start = 0
-        # Cap matches per keyword to prevent one common word dominating
-        matches_for_kw = 0
-        while matches_for_kw < 20:
-            idx = content_lower.find(kw_lower, start)
-            if idx == -1:
-                break
-            positions.append(idx)
-            start = idx + len(kw_lower)
-            matches_for_kw += 1
 
-    if not positions:
-        # No keyword matches at all → just send the intro
+    if not kw_list:
         return content[:_BUDGET]
 
-    # 3. Build windows around each match position
-    raw_windows = sorted(
-        (max(0, p - _WINDOW_RADIUS), min(len(content), p + _WINDOW_RADIUS))
-        for p in positions
-    )
+    # 2. Score overlapping chunks by distinct keyword count
+    scored: list[tuple[int, int, int]] = []  # (score, start, end)
+    for start in range(0, len(content), _CHUNK_STEP):
+        end = min(start + _CHUNK_SIZE, len(content))
+        chunk = content_lower[start:end]
+        score = sum(1 for kw in kw_list if kw in chunk)
+        if score > 0:
+            scored.append((score, start, end))
 
-    # 4. Merge overlapping/adjacent windows
-    merged: list[tuple[int, int]] = [raw_windows[0]]
-    for s, e in raw_windows[1:]:
-        last_s, last_e = merged[-1]
-        if s <= last_e + 50:                    # within 50 chars → merge
-            merged[-1] = (last_s, max(last_e, e))
-        else:
-            merged.append((s, e))
+    if not scored:
+        return content[:_BUDGET]
 
-    # 5. Assemble: intro + merged windows, up to budget
+    # 3. Pick chunks greedily by score (highest first), merge overlapping
+    scored.sort(key=lambda x: -x[0])
+    selected: list[tuple[int, int]] = []
+    for _, s, e in scored:
+        # Merge with any already-selected overlapping interval
+        merged_s, merged_e = s, e
+        remaining = []
+        for ps, pe in selected:
+            if merged_s <= pe and ps <= merged_e:
+                merged_s = min(merged_s, ps)
+                merged_e = max(merged_e, pe)
+            else:
+                remaining.append((ps, pe))
+        remaining.append((merged_s, merged_e))
+        selected = remaining
+
+    # Sort selected windows by position for output
+    selected.sort()
+
+    # 4. Assemble: intro + top windows, up to budget
     intro = content[:_INTRO_CHARS]
     pieces: list[str] = [intro]
     used = len(intro)
 
-    for s, e in merged:
-        if e <= _INTRO_CHARS:                    # already covered by intro
+    for s, e in selected:
+        if e <= _INTRO_CHARS:
             continue
         if s < _INTRO_CHARS:
-            s = _INTRO_CHARS                     # avoid duplicating intro text
+            s = _INTRO_CHARS
         section = content[s:e]
-        if used + len(section) + len(_ELLIPSIS) > _BUDGET:
-            remaining = _BUDGET - used - len(_ELLIPSIS)
-            if remaining > 200:
+        gap = len(_ELLIPSIS)
+        if used + len(section) + gap > _BUDGET:
+            remaining_budget = _BUDGET - used - gap
+            if remaining_budget > 200:
                 pieces.append(_ELLIPSIS)
-                pieces.append(section[:remaining])
+                pieces.append(section[:remaining_budget])
             break
         pieces.append(_ELLIPSIS)
         pieces.append(section)
-        used += len(section) + len(_ELLIPSIS)
+        used += len(section) + gap
 
     result = "".join(pieces)
-    # Debug: show windowing stats (entity name truncated for readability)
     entity_short = entity[:20]
-    hit_kws = [kw for kw in keywords if kw.lower() in content_lower and len(kw) > 2][:5]
+    hit_kws = [kw for kw in kw_list if kw in content_lower][:5]
     print(f"    [window] {entity_short!r} field={field.id!r}: "
           f"{len(content):,}→{len(result):,} chars, "
-          f"matched keywords: {hit_kws}")
+          f"top keywords: {hit_kws}")
     return result
 
 
@@ -328,6 +330,64 @@ def extract_from_source(
     )
 
 
+def _inject_wikidata_url(entity: str, results: list, seen_urls: set) -> None:
+    """
+    Query Wikidata for the official website (P856) of `entity`.
+    Wikidata stores structured facts that Wikipedia's plaintext API strips
+    (infobox data like official URLs never appear in explaintext extracts).
+    Injects a synthetic ExtractionResult directly if a URL is found.
+    """
+    import urllib.request, urllib.parse, json as _json, time
+
+    UA = WikipediaSearchClient._UA
+    he_chars = sum(1 for c in entity if 'א' <= c <= 'ת')
+    site = "hewiki" if he_chars > 0 else "enwiki"
+
+    params = urllib.parse.urlencode({
+        "action": "wbgetentities",
+        "sites": site,
+        "titles": entity,
+        "props": "claims|sitelinks",
+        "format": "json", "utf8": 1,
+    })
+    try:
+        time.sleep(1)
+        req = urllib.request.Request(
+            f"https://www.wikidata.org/w/api.php?{params}",
+            headers={"User-Agent": UA}
+        )
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = _json.loads(resp.read().decode("utf-8"))
+
+        entities = data.get("entities", {})
+        for qid, ent in entities.items():
+            if ent.get("missing"):
+                continue
+            claims = ent.get("claims", {})
+            # P856 = official website
+            for claim in claims.get("P856", []):
+                url_val = (
+                    claim.get("mainsnak", {})
+                        .get("datavalue", {})
+                        .get("value")
+                )
+                if url_val and url_val not in seen_urls:
+                    seen_urls.add(url_val)
+                    wikidata_url = f"https://www.wikidata.org/wiki/{qid}"
+                    print(f"    [wikidata] P856 official website: {url_val}")
+                    results.append(ExtractionResult(
+                        field_id="",          # filled by caller
+                        value=url_val,
+                        quote_original=f"Wikidata P856 (official website) for {entity}: {url_val}",
+                        source_url=wikidata_url,
+                        source_domain="www.wikidata.org",
+                        is_grounded=True,
+                        extractor_confidence=0.95,
+                    ))
+    except Exception as exc:
+        print(f"    [wikidata error] {exc}")
+
+
 def search_and_extract(
     field: ColumnPlan,
     entity: str,
@@ -364,11 +424,20 @@ def search_and_extract(
     query_cap = 3 if is_wikipedia else 6
 
     # For Wikipedia: fetch the entity's own article first (most reliable source).
-    # This gets e.g. the full "תל אביב-יפו" article (with redirect) which
-    # contains the mayor list, official website, and municipality name —
-    # avoiding the problem of search returning tangentially related articles.
+    # For person_name fields also fetch the dedicated "ראשי עיר {entity}" page
+    # (Wikipedia maintains this separately from the main city article).
+    # For url fields also query Wikidata (P856 = official website property).
     if is_wikipedia:
-        direct = tavily.fetch_entity_article(entity)
+        extra = []
+        if field.type == "person_name" and field.temporal_anchor:
+            extra.append(f"ראשי עיר {entity}")
+        if field.type == "url":
+            _inject_wikidata_url(entity, results, seen_urls)
+            for r in results:
+                if r.field_id == "":
+                    r.field_id = field.id
+
+        direct = tavily.fetch_entity_article(entity, extra_titles=extra)
         for hit in direct.get("results", []):
             url = hit.get("url", "")
             if url and url not in seen_urls:
@@ -582,11 +651,14 @@ class WikipediaSearchClient:
 
         return {"results": results}
 
-    def fetch_entity_article(self, entity: str) -> dict:
+    def fetch_entity_article(self, entity: str, extra_titles: list[str] | None = None) -> dict:
         """
-        Directly fetch the Wikipedia article for `entity` by title.
+        Directly fetch Wikipedia articles for `entity` (and optional extra titles).
         Follows redirects (e.g. 'תל אביב' → 'תל אביב-יפו').
         Returns a Tavily-compatible results dict.
+
+        `extra_titles` lets callers fetch related articles in one round-trip,
+        e.g. ["ראשי עיר תל אביב-יפו"] for the dedicated mayors list page.
         """
         import urllib.parse
 
@@ -594,11 +666,13 @@ class WikipediaSearchClient:
         lang = "he" if he_chars > 0 else "en"
         base = f"https://{lang}.wikipedia.org/w/api.php"
 
+        titles_to_fetch = [entity] + (extra_titles or [])
+
         params = urllib.parse.urlencode({
             "action": "query", "prop": "extracts",
-            "titles": entity,
+            "titles": "|".join(titles_to_fetch),
             "explaintext": 1, "exsectionformat": "plain",
-            "redirects": 1,          # תל אביב → תל אביב-יפו automatically
+            "redirects": 1,
             "format": "json", "utf8": 1,
         })
         try:
@@ -619,7 +693,7 @@ class WikipediaSearchClient:
                 results.append({
                     "url": url, "title": title,
                     "content": extract[:400],
-                    "raw_content": extract,   # full text — windowing done by _select_relevant_text
+                    "raw_content": extract,
                 })
                 print(f"    [direct fetch] '{title}' ({len(extract):,} chars)")
             return {"results": results}
