@@ -879,6 +879,95 @@ class DuckDuckGoClient:
             return None
 
 
+class SerpApiClient:
+    """
+    Tavily-compatible client backed by SerpAPI (Google Search).
+    Free tier: 100 searches/month, no credit card required.
+
+    Setup:
+      1. Sign up at serpapi.com (free, no card)
+      2. Copy your API key from the dashboard
+      3. Add to .env:  SERPAPI_KEY=your_key_here
+
+    Usage: py main.py ... --search-engine serpapi
+    """
+
+    _HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+            "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
+        ),
+        "Accept-Language": "he,en;q=0.9",
+    }
+    _FETCH_TIMEOUT = 10
+    _MAX_CONTENT   = 8000
+
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+
+    def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
+        import urllib.request, urllib.parse, json as _json
+
+        params = urllib.parse.urlencode({
+            "q":       query,
+            "api_key": self.api_key,
+            "engine":  "google",
+            "hl":      "iw",    # Hebrew interface
+            "gl":      "il",    # Israel region
+            "num":     min(max_results, 10),
+        })
+        try:
+            req = urllib.request.Request(
+                f"https://serpapi.com/search.json?{params}",
+                headers={"User-Agent": self._HEADERS["User-Agent"]},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = _json.loads(resp.read().decode("utf-8"))
+        except Exception as exc:
+            body = getattr(exc, "read", lambda: b"")()
+            if body:
+                try:
+                    msg = _json.loads(body).get("error", str(exc))
+                except Exception:
+                    msg = str(exc)
+            else:
+                msg = str(exc)
+            print(f"    [serpapi error] {msg}")
+            return {"results": []}
+
+        results = []
+        for item in data.get("organic_results", []):
+            url     = item.get("link", "")
+            title   = item.get("title", "")
+            snippet = item.get("snippet", "")
+            raw_content = self._fetch(url) or snippet
+            results.append({
+                "url": url, "title": title,
+                "content": snippet, "raw_content": raw_content,
+            })
+        return {"results": results}
+
+    def _fetch(self, url: str) -> str | None:
+        import urllib.request
+        if not url.startswith("http"):
+            return None
+        try:
+            req = urllib.request.Request(url, headers=self._HEADERS)
+            with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
+                raw = resp.read()
+                charset = resp.headers.get_content_charset() or "utf-8"
+                try:
+                    html = raw.decode(charset)
+                except (UnicodeDecodeError, LookupError):
+                    try:
+                        html = raw.decode("windows-1255")
+                    except Exception:
+                        html = raw.decode("utf-8", errors="replace")
+                return _strip_html(html)[: self._MAX_CONTENT]
+        except Exception:
+            return None
+
+
 class GoogleSearchClient:
     """
     Tavily-compatible client backed by Google Custom Search JSON API.

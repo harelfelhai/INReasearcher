@@ -30,7 +30,7 @@ from tavily import TavilyClient
 from research_agent.compiler import compile_research_plan
 from research_agent.extractor import (
     search_and_extract, MockTavilyClient, DuckDuckGoClient,
-    WikipediaSearchClient, GoogleSearchClient,
+    WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
 )
 from research_agent.verifier import verify_field
 from research_agent.output import write_csv, write_json, print_summary
@@ -307,7 +307,8 @@ def build_parser() -> argparse.ArgumentParser:
                    help="After research completes, interactively review every cell to teach the system")
     p.add_argument("--mock-search", action="store_true",
                    help="Use mock search responses (no API key needed) to test the full pipeline")
-    p.add_argument("--search-engine", choices=["tavily", "duckduckgo", "wikipedia", "google"],
+    p.add_argument("--search-engine",
+                   choices=["tavily", "duckduckgo", "wikipedia", "google", "serpapi"],
                    default="wikipedia",
                    help="Search backend (default: wikipedia — no API key needed)")
     p.add_argument("--verbose", "-v", action="store_true")
@@ -346,6 +347,17 @@ def main() -> None:
     elif args.search_engine == "duckduckgo":
         search = DuckDuckGoClient()
         print("[search] Using DuckDuckGo (no API key required).", file=sys.stderr)
+    elif args.search_engine == "serpapi":
+        serpapi_key = os.getenv("SERPAPI_KEY", "")
+        if not serpapi_key:
+            sys.exit(
+                "ERROR: SERPAPI_KEY not set in .env\n"
+                "  1. Sign up free (no card) at serpapi.com\n"
+                "  2. Copy your API key from the dashboard\n"
+                "  3. Add to .env:  SERPAPI_KEY=your_key_here"
+            )
+        search = SerpApiClient(api_key=serpapi_key)
+        print("[search] Using SerpAPI (Google Search).", file=sys.stderr)
     elif args.search_engine == "google":
         google_key = os.getenv("GOOGLE_API_KEY", "")
         google_cse  = os.getenv("GOOGLE_CSE_ID", "")
