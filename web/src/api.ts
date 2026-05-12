@@ -9,6 +9,40 @@ import type {
 
 const headers = { "Content-Type": "application/json" };
 
+/**
+ * Reads an error response body and extracts the most useful message we can.
+ * FastAPI returns `{"detail": "..."}` on errors thrown by our exception
+ * handler, but we also fall back gracefully to plain text or generic
+ * status messages.
+ */
+async function readError(r: Response): Promise<string> {
+  let body = "";
+  try {
+    body = await r.text();
+  } catch {
+    /* empty */
+  }
+  try {
+    const json = JSON.parse(body);
+    if (typeof json.detail === "string") return json.detail;
+    if (json.detail) return JSON.stringify(json.detail);
+  } catch {
+    /* not JSON, fall through */
+  }
+  return body || `HTTP ${r.status} ${r.statusText}`;
+}
+
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  let r: Response;
+  try {
+    r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error(`Network error: ${(e as Error).message}`);
+  }
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
+}
+
 export interface CompileResponse {
   kind: "clarification" | "plan";
   clarification?: ClarificationRequest;
@@ -19,44 +53,20 @@ export async function compileSchema(
   question: string,
   entity_type = "",
 ): Promise<CompileResponse> {
-  const r = await fetch("/api/compile-schema", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ question, entity_type }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  return postJson("/api/compile-schema", { question, entity_type });
 }
 
 export async function auditPlan(plan: ResearchPlan): Promise<FieldAuditReport> {
-  const r = await fetch("/api/audit", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ plan }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  return postJson("/api/audit", { plan });
 }
 
 export async function mockPreview(plan: ResearchPlan): Promise<MockRow[]> {
-  const r = await fetch("/api/mock-preview", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ plan }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  const data = await r.json();
+  const data = await postJson<{ rows: MockRow[] }>("/api/mock-preview", { plan });
   return data.rows;
 }
 
 export async function enrichPlan(plan: ResearchPlan): Promise<ResearchPlan> {
-  const r = await fetch("/api/enrich", {
-    method: "POST",
-    headers,
-    body: JSON.stringify({ plan }),
-  });
-  if (!r.ok) throw new Error(await r.text());
-  return r.json();
+  return postJson("/api/enrich", { plan });
 }
 
 export interface RunEvents {
@@ -86,7 +96,7 @@ export function runResearch(
         body: JSON.stringify({ plan, entities, search_engine }),
         signal: ctrl.signal,
       });
-      if (!r.ok || !r.body) throw new Error(await r.text());
+      if (!r.ok || !r.body) throw new Error(await readError(r));
 
       const reader = r.body.getReader();
       const decoder = new TextDecoder();

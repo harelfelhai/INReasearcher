@@ -18,15 +18,17 @@ Run:
 from __future__ import annotations
 
 import os
+import sys
 import json
 import asyncio
+import traceback
 from typing import Literal, Optional
 
 from dotenv import load_dotenv
 import anthropic
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 
 from research_agent.compiler import (
@@ -63,6 +65,54 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# ── Error translation ────────────────────────────────────────────────────────
+#
+# All endpoints rely on a single exception handler. It:
+#   1. Logs the full traceback to the uvicorn terminal so the developer can
+#      always see what went wrong.
+#   2. Translates the common Anthropic errors into actionable messages with
+#      sensible HTTP status codes.
+#   3. Falls back to a generic 500 that still includes the exception class
+#      name (e.g. "ConnectionError") rather than just "error".
+
+def _translate(exc: Exception) -> tuple[int, str]:
+    msg = str(exc)
+    if isinstance(exc, anthropic.BadRequestError) and "credit balance" in msg.lower():
+        return 402, (
+            "Anthropic credits exhausted. "
+            "Top up at console.anthropic.com → Plans & Billing, then retry."
+        )
+    if isinstance(exc, anthropic.AuthenticationError):
+        return 401, "Invalid ANTHROPIC_API_KEY — check the .env file."
+    if isinstance(exc, anthropic.RateLimitError):
+        return 429, f"Anthropic rate limit hit. Wait a moment and retry. ({msg})"
+    if isinstance(exc, anthropic.APIConnectionError):
+        return 503, f"Could not reach Anthropic API: {msg}"
+    if isinstance(exc, anthropic.APIError):
+        return 502, f"Anthropic API error: {msg}"
+    return 500, f"{type(exc).__name__}: {msg}"
+
+
+@app.exception_handler(Exception)
+async def all_exceptions_handler(request: Request, exc: Exception):
+    # Always log the full traceback so the dev can debug from the terminal.
+    print(
+        f"\n[error] {request.method} {request.url.path} →",
+        file=sys.stderr,
+    )
+    traceback.print_exc()
+
+    # Pass HTTPException through unchanged so explicit raises keep their codes.
+    if isinstance(exc, HTTPException):
+        return JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+
+    status, detail = _translate(exc)
+    return JSONResponse(status_code=status, content={"detail": detail})
 
 
 # ── Shared Claude client ─────────────────────────────────────────────────────
@@ -233,6 +283,10 @@ def api_run(req: RunRequest):
 
             yield _sse("done", {"n": len(entities)})
         except Exception as exc:
-            yield _sse("error", {"message": str(exc)})
+            # Log to the uvicorn terminal so the dev sees the full traceback.
+            print(f"\n[error] /api/run stream failed →", file=sys.stderr)
+            traceback.print_exc()
+            _, detail = _translate(exc)
+            yield _sse("error", {"message": detail})
 
     return StreamingResponse(stream(), media_type="text/event-stream")
