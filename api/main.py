@@ -40,6 +40,7 @@ from research_agent.compiler import (
 from research_agent.extractor import (
     search_and_extract,
     probe_field_list,
+    verify_probe_extraction,
     MockTavilyClient,
     DuckDuckGoClient,
     WikipediaSearchClient,
@@ -255,11 +256,16 @@ def api_run(req: RunRequest):
                         deferred.append(field)
                         return
 
-                    # Use probe result if the directory page found this entity
+                    # Use probe result if the directory page found this entity.
+                    # Then run ONE focused verification search to find an
+                    # independent corroborating source (different domain).
                     if field.id in probe_results:
                         probe_hit = probe_results[field.id].get(entity)
                         if probe_hit and probe_hit.value:
-                            cell = verify_field(field, [probe_hit])
+                            extras = verify_probe_extraction(
+                                field, entity, probe_hit, search, claude,
+                            )
+                            cell = verify_field(field, [probe_hit] + extras)
                             cells[field.id] = cell
                             if cell.value:
                                 resolved[field.id] = cell.value

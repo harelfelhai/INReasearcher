@@ -34,7 +34,7 @@ from research_agent.compiler import (
     enrich_with_queries,
 )
 from research_agent.extractor import (
-    search_and_extract, probe_field_list,
+    search_and_extract, probe_field_list, verify_probe_extraction,
     MockTavilyClient, DuckDuckGoClient,
     WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
 )
@@ -245,16 +245,23 @@ def research_entity(
                 print(f"  [defer] {field.id} waiting on {field.depends_on}", file=sys.stderr)
             return
 
-        # Use probe result if available for this (field, entity) pair
+        # Use probe result if available for this (field, entity) pair.
+        # Then run a focused verification search for independent corroboration.
         if probe_results and field.id in probe_results:
             probe_hit = probe_results[field.id].get(entity)
             if probe_hit and probe_hit.value:
-                cell = verify_field(field, [probe_hit])
+                print(f"  [field] {field.id} ({field.label_he}) — probe hit, verifying",
+                      file=sys.stderr)
+                extras = verify_probe_extraction(field, entity, probe_hit, tavily, claude)
+                cell = verify_field(field, [probe_hit] + extras)
                 cells[field.id] = cell
                 if cell.value:
                     resolved_deps[field.id] = cell.value
-                    print(f"  [field] {field.id} → ✓ {cell.value[:60]} [probe/{cell.confidence}]",
+                    print(f"    → ✓ {cell.value[:60]} "
+                          f"[probe+{len(extras)}/{cell.confidence}]",
                           file=sys.stderr)
+                else:
+                    print(f"    → ✗ verification rejected probe value", file=sys.stderr)
                 return
 
         print(f"  [field] {field.id} ({field.label_he})", file=sys.stderr)

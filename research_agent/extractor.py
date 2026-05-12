@@ -495,6 +495,74 @@ def bulk_extract_from_source(
     return results
 
 
+def verify_probe_extraction(
+    field,
+    entity: str,
+    probe_extraction: ExtractionResult,
+    search_client,
+    claude: anthropic.Anthropic,
+) -> list[ExtractionResult]:
+    """
+    When the probe found a value for (field, entity), run ONE focused search
+    using that value as the anchor — to discover independent sources that
+    confirm or contradict it.
+
+    Why this matters: the probe gives us 1 source. Identity facts need
+    min_corroborations: 2 to reach HIGH confidence. A query like
+    '"Shlomo Lahat" Tel Aviv 1990' is far more precise than a generic
+    "Tel Aviv mayor 1990" query — and (importantly) will NOT return the
+    same directory page again, so we get independent evidence.
+
+    Returns 0-2 additional ExtractionResult objects. The caller combines
+    these with the probe extraction and passes the merged list to
+    verify_field, which handles corroboration_count and confidence.
+    """
+    value = probe_extraction.value
+    if not value:
+        return []
+
+    # Build a high-precision query: the found value is the anchor.
+    # For URL fields the URL itself is unique enough — no need to add context.
+    if field.type == "url":
+        query = value
+    else:
+        query = f'"{value}" {entity}'
+        if field.temporal_anchor:
+            query += f" {field.temporal_anchor}"
+
+    print(f"  [probe-verify] entity={entity!r} field={field.id!r} q={query!r}")
+
+    try:
+        response = search_client.search(
+            query, max_results=2, include_raw_content=True
+        )
+    except Exception as exc:
+        print(f"  [probe-verify error] {exc}")
+        return []
+
+    probe_domain = probe_extraction.source_domain
+    extras: list[ExtractionResult] = []
+
+    for hit in response.get("results", []):
+        url = hit.get("url", "")
+        content = hit.get("raw_content") or hit.get("content", "")
+        if not url or not content or len(content) < 80:
+            continue
+        if _domain(url) == probe_domain:
+            # Same source as the probe — would inflate corroboration_count.
+            continue
+
+        extraction = extract_from_source(
+            field=field, entity=entity,
+            source_url=url, source_content=content,
+            resolved_deps={}, client=claude, memory=None,
+        )
+        if extraction.value:
+            extras.append(extraction)
+
+    return extras
+
+
 def probe_field_list(
     field,
     entities: list[str],
