@@ -300,6 +300,15 @@ _QUERIES_TOOL = {
                             "items": {"type": "string"},
                         },
                         "min_corroborations": {"type": "integer"},
+                        "directory_probe_query_he": {
+                            "type": "string",
+                            "description": (
+                                "ONE entity-agnostic Hebrew query to find a list/table page "
+                                "covering this field for MANY entities at once. "
+                                "No {entity} placeholder. "
+                                "Example: 'רשימת ראשי ערים ישראל 1990' or 'ראשי עיריות ישראל 1990 טבלה'."
+                            ),
+                        },
                     },
                     "required": [
                         "id",
@@ -335,7 +344,19 @@ query. Do not default to a stock list.
   - Identity facts (names, dates, IDs):  min_corroborations: 2
   - URLs / reference links:              min_corroborations: 1
   - Free text / descriptive:             min_corroborations: 1
-  - Numerical / statistical:             min_corroborations: 2"""
+  - Numerical / statistical:             min_corroborations: 2
+
+═══ Directory probe query ═══
+For EVERY field, also generate directory_probe_query_he — a single entity-agnostic
+Hebrew search query that might find a list/table page covering this field for many
+entities at once. This enables a major cost optimisation (one page → N entities).
+  - Do NOT include {entity}.
+  - Include the entity type, field label, and temporal anchor.
+  - Use list-oriented language: "רשימת", "טבלה", "לפי שנה", "כל ה-".
+  Examples:
+    person_name + temporal_anchor=1990 → "רשימת ראשי ערים ישראל 1990"
+    url, entity_type=municipality     → "אתרים רשמיים עיריות ישראל"
+    number, population                → "אוכלוסיית ערים ישראל לפי שנה" """
 
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
@@ -507,6 +528,7 @@ def enrich_with_queries(
                 "min_corroborations": enrich.get(
                     "min_corroborations", col.min_corroborations
                 ),
+                "directory_probe_query_he": enrich.get("directory_probe_query_he") or None,
             })
         )
     return ResearchPlan(

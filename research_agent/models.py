@@ -14,6 +14,7 @@ class ColumnPlan(BaseModel):
     preferred_source_domains: List[str] = Field(default_factory=list)
     min_corroborations: int = 1                    # independent domains required
     depends_on: Optional[str] = None               # id of field whose value must resolve first
+    directory_probe_query_he: Optional[str] = None  # entity-agnostic query for directory/list pages
 
 
 class ResearchPlan(BaseModel):

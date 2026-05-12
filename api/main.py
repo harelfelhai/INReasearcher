@@ -39,6 +39,7 @@ from research_agent.compiler import (
 )
 from research_agent.extractor import (
     search_and_extract,
+    probe_field_list,
     MockTavilyClient,
     DuckDuckGoClient,
     WikipediaSearchClient,
@@ -224,6 +225,25 @@ def api_run(req: RunRequest):
 
     async def stream():
         try:
+            # ── Phase 0: Probe each field for a directory/list page ──────────
+            # For each field, run ONE entity-agnostic search to detect pages that
+            # cover this field for many entities at once (the field-list axis).
+            # Saves N-1 searches per field that has a good directory source.
+            probe_results: dict[str, dict] = {}   # field_id → {entity → ExtractionResult}
+            for field in plan.columns:
+                if field.directory_probe_query_he:
+                    result = probe_field_list(field, entities, search, claude)
+                    if result:
+                        probe_results[field.id] = result
+                        found_n = sum(1 for r in result.values() if r.value)
+                        yield _sse("probe_hit", {
+                            "field_id": field.id,
+                            "entities_found": found_n,
+                            "entities_total": len(entities),
+                        })
+                await asyncio.sleep(0)
+
+            # ── Phase 1: Entity loop ─────────────────────────────────────────
             for entity in entities:
                 yield _sse("entity_start", {"entity": entity})
                 resolved: dict[str, str] = {}
@@ -234,6 +254,18 @@ def api_run(req: RunRequest):
                     if field.depends_on and field.depends_on not in resolved:
                         deferred.append(field)
                         return
+
+                    # Use probe result if the directory page found this entity
+                    if field.id in probe_results:
+                        probe_hit = probe_results[field.id].get(entity)
+                        if probe_hit and probe_hit.value:
+                            cell = verify_field(field, [probe_hit])
+                            cells[field.id] = cell
+                            if cell.value:
+                                resolved[field.id] = cell.value
+                            return
+
+                    # Fallback: entity-by-entity search
                     extractions = search_and_extract(
                         field=field,
                         entity=entity,
@@ -249,7 +281,6 @@ def api_run(req: RunRequest):
 
                 for field in plan.columns:
                     process(field)
-                    # let the event loop flush
                     await asyncio.sleep(0)
                     if field.id in cells:
                         yield _sse("field_result", {
@@ -283,7 +314,6 @@ def api_run(req: RunRequest):
 
             yield _sse("done", {"n": len(entities)})
         except Exception as exc:
-            # Log to the uvicorn terminal so the dev sees the full traceback.
             print(f"\n[error] /api/run stream failed →", file=sys.stderr)
             traceback.print_exc()
             _, detail = _translate(exc)

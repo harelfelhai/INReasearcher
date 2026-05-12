@@ -330,6 +330,236 @@ def extract_from_source(
     )
 
 
+# ── Probe model (field-list axis) ────────────────────────────────────────────
+#
+# For each field we run ONE entity-agnostic search ("רשימת ראשי ערים 1990")
+# to check if a directory or table page exists that covers many entities at once.
+# If found, we extract the field for ALL entities in a single Claude call instead
+# of N individual searches.  Fall back to entity-by-entity search for any entity
+# the probe page doesn't cover.
+
+_MIN_PROBE_COVERAGE = 0.25    # probe page must mention ≥ 25% of entities to be used
+_MIN_PROBE_ABSOLUTE = 2       # or at least 2 entities (for small entity lists)
+_PROBE_KEYWORDS = [
+    "רשימה", "רשימת", "טבלה", "לפי שנה", "כל ה", "list", "table", "directory",
+    "index", "all cities", "all municipalities",
+]
+
+_BULK_EXTRACTOR_TOOL = {
+    "name": "bulk_extract_field",
+    "description": (
+        "Extract one data field for MANY entities simultaneously from a directory "
+        "or list page. Return one extraction object per entity."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "extractions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entity_name": {
+                            "type": "string",
+                            "description": "Exact entity name from the input list.",
+                        },
+                        "value": {
+                            "type": ["string", "null"],
+                            "description": "Extracted value, or null if not found in text.",
+                        },
+                        "quote_original": {
+                            "type": ["string", "null"],
+                            "description": "Direct verbatim copy-paste from source proving the value.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        },
+                    },
+                    "required": ["entity_name", "value", "quote_original", "confidence"],
+                },
+            },
+        },
+        "required": ["extractions"],
+    },
+}
+
+_BULK_EXTRACTOR_SYSTEM = """\
+You are a precision data extractor working on a DIRECTORY PAGE — a list, table,
+or index that contains data for many entities.
+
+For EACH entity in the provided list, find the requested field value in the source
+text. All grounding rules still apply:
+
+  1. Return a value ONLY if it is explicitly in the text.
+  2. quote_original must be a direct verbatim copy-paste from the source.
+  3. Return null for entities not mentioned — do not guess or infer.
+  4. Match temporal constraints strictly if a year/period is specified.
+  5. Return one extraction object per entity in the input list — no additions, no omissions."""
+
+
+def _score_probe_coverage(content: str, entities: list[str]) -> float:
+    """Fraction of entities (by partial name match) that appear in the page text."""
+    if not entities:
+        return 0.0
+    content_lower = content.lower()
+    found = 0
+    for entity in entities:
+        parts = [p for p in entity.split() if len(p) > 2]
+        if parts and all(p.lower() in content_lower for p in parts[:2]):
+            found += 1
+        elif entity.lower() in content_lower:
+            found += 1
+    return found / len(entities)
+
+
+def bulk_extract_from_source(
+    field,
+    entities: list[str],
+    source_url: str,
+    source_content: str,
+    client: anthropic.Anthropic,
+) -> dict[str, ExtractionResult]:
+    """
+    Extract one field for all entities from a single directory/list page.
+    Returns a dict of entity_name → ExtractionResult (value may be None if not found).
+    """
+    temporal_note = (
+        f"\nTEMPORAL CONSTRAINT: The answer must be valid for '{field.temporal_anchor}'."
+        if field.temporal_anchor else ""
+    )
+    entities_list = "\n".join(f"  - {e}" for e in entities)
+    user_prompt = (
+        f"Field to extract: {field.label_en} / {field.label_he}\n"
+        f"Field type: {field.type}{temporal_note}\n\n"
+        f"Entities to look up ({len(entities)} total):\n{entities_list}\n\n"
+        f"Source URL: {source_url}\n"
+        f"Source text:\n---\n{source_content[:_BUDGET]}\n---\n\n"
+        f"For EACH entity above, extract '{field.label_en}' if it appears in the text. "
+        f"Return exactly {len(entities)} extraction objects — one per entity."
+    )
+
+    max_tokens = min(4096, 512 + 64 * len(entities))
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        system=_BULK_EXTRACTOR_SYSTEM,
+        tools=[_BULK_EXTRACTOR_TOOL],
+        tool_choice={"type": "any"},
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    extractions_raw = tool_block.input.get("extractions", [])
+
+    results: dict[str, ExtractionResult] = {}
+    for ext in extractions_raw:
+        entity_name = ext.get("entity_name", "")
+        raw_value = ext.get("value")
+        raw_quote = ext.get("quote_original")
+        confidence = float(ext.get("confidence", 0.0))
+
+        grounded = False
+        verified_quote = None
+        if raw_value and raw_quote:
+            grounded, verified_quote = is_grounded(raw_quote, source_content)
+            if not grounded:
+                grounded, verified_quote = is_grounded(raw_value, source_content)
+        elif raw_value:
+            grounded, verified_quote = is_grounded(raw_value, source_content)
+
+        results[entity_name] = ExtractionResult(
+            field_id=field.id,
+            value=raw_value if grounded else None,
+            quote_original=verified_quote if grounded else None,
+            source_url=source_url,
+            source_domain=_domain(source_url),
+            is_grounded=grounded,
+            extractor_confidence=confidence if grounded else 0.0,
+        )
+
+    # Fill in missing entities as NOT_FOUND
+    for entity in entities:
+        if entity not in results:
+            results[entity] = ExtractionResult(
+                field_id=field.id,
+                value=None,
+                quote_original=None,
+                source_url=source_url,
+                source_domain=_domain(source_url),
+                is_grounded=False,
+                extractor_confidence=0.0,
+            )
+
+    return results
+
+
+def probe_field_list(
+    field,
+    entities: list[str],
+    search_client,
+    claude: anthropic.Anthropic,
+    min_coverage: float = _MIN_PROBE_COVERAGE,
+) -> dict[str, ExtractionResult] | None:
+    """
+    Try to find a directory/list page covering `field` for many entities at once.
+
+    Returns a dict of entity_name → ExtractionResult when a good directory page is
+    found.  Returns None if no suitable page exists (caller falls back to per-entity
+    search).
+
+    Cost savings: replaces N search calls + N Claude extraction calls with
+    1 search call + 1 Claude bulk-extraction call.
+    """
+    probe_query = field.directory_probe_query_he
+    if not probe_query:
+        return None
+
+    print(f"  [probe] field={field.id!r} query={probe_query!r}")
+
+    try:
+        response = search_client.search(probe_query, max_results=3, include_raw_content=True)
+    except Exception as exc:
+        print(f"  [probe error] search failed: {exc}")
+        return None
+
+    for hit in response.get("results", []):
+        url = hit.get("url", "")
+        content = hit.get("raw_content") or hit.get("content", "")
+        if not content or len(content) < 200:
+            continue
+
+        coverage = _score_probe_coverage(content, entities)
+        found_abs = int(coverage * len(entities))
+        has_dir_kw = any(kw in content.lower() for kw in _PROBE_KEYWORDS)
+
+        print(
+            f"  [probe] {url[:70]!r}: "
+            f"coverage={coverage:.0%} ({found_abs}/{len(entities)}), "
+            f"dir_kw={has_dir_kw}"
+        )
+
+        qualifies = (
+            coverage >= min_coverage
+            or found_abs >= _MIN_PROBE_ABSOLUTE
+            or (coverage >= 0.10 and has_dir_kw)
+        )
+        if not qualifies:
+            continue
+
+        print(f"  [probe] HIT — bulk-extracting from {url[:70]!r}")
+        bulk = bulk_extract_from_source(field, entities, url, content, claude)
+        found_count = sum(1 for r in bulk.values() if r.value)
+        print(f"  [probe] result: {found_count}/{len(entities)} entities filled")
+
+        # Only accept if we actually extracted something useful
+        if found_count >= max(1, len(entities) * 0.10):
+            return bulk
+
+    return None
+
+
 def _wikidata_year(qualifier_list: list) -> int | None:
     """Extract a year integer from a Wikidata time-qualifier list."""
     for q in qualifier_list:
@@ -507,6 +737,9 @@ def search_and_extract(
         extra = []
         if field.type == "person_name" and field.temporal_anchor:
             extra.append(f"ראשי עיר {entity}")
+
+        direct = tavily.fetch_entity_article(entity, extra_titles=extra)
+
         if field.type in ("url", "person_name"):
             # Use the canonical Wikipedia title (post-redirect) for Wikidata lookup,
             # because Wikidata sitelinks use canonical titles not redirect aliases.
@@ -514,8 +747,6 @@ def search_and_extract(
             canonical = (direct["results"][0]["title"]
                          if direct.get("results") else entity)
             _inject_wikidata(canonical, field, results, seen_urls)
-
-        direct = tavily.fetch_entity_article(entity, extra_titles=extra)
         for hit in direct.get("results", []):
             url = hit.get("url", "")
             if url and url not in seen_urls:

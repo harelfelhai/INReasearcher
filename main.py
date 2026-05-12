@@ -34,7 +34,8 @@ from research_agent.compiler import (
     enrich_with_queries,
 )
 from research_agent.extractor import (
-    search_and_extract, MockTavilyClient, DuckDuckGoClient,
+    search_and_extract, probe_field_list,
+    MockTavilyClient, DuckDuckGoClient,
     WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
 )
 from research_agent.verifier import verify_field
@@ -227,6 +228,7 @@ def research_entity(
     claude: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
     verbose: bool = False,
+    probe_results: dict | None = None,   # field_id → {entity → ExtractionResult}
 ) -> EntityResult:
     print(f"\n[entity] {entity}", file=sys.stderr)
 
@@ -242,6 +244,18 @@ def research_entity(
             if verbose:
                 print(f"  [defer] {field.id} waiting on {field.depends_on}", file=sys.stderr)
             return
+
+        # Use probe result if available for this (field, entity) pair
+        if probe_results and field.id in probe_results:
+            probe_hit = probe_results[field.id].get(entity)
+            if probe_hit and probe_hit.value:
+                cell = verify_field(field, [probe_hit])
+                cells[field.id] = cell
+                if cell.value:
+                    resolved_deps[field.id] = cell.value
+                    print(f"  [field] {field.id} → ✓ {cell.value[:60]} [probe/{cell.confidence}]",
+                          file=sys.stderr)
+                return
 
         print(f"  [field] {field.id} ({field.label_he})", file=sys.stderr)
         extractions = search_and_extract(
@@ -598,11 +612,30 @@ def main() -> None:
 
     print(f"\n[start] {len(entities)} entities × {len(plan.columns)} fields", file=sys.stderr)
 
+    def _run_probes(current_plan: ResearchPlan) -> dict:
+        """Run field-list probes for all fields, return probe_results dict."""
+        probes: dict = {}
+        probe_fields = [f for f in current_plan.columns if f.directory_probe_query_he]
+        if probe_fields:
+            print(f"\n[probe] Checking {len(probe_fields)} field(s) for directory pages…",
+                  file=sys.stderr)
+            for field in probe_fields:
+                result = probe_field_list(field, entities, tavily, claude)
+                if result:
+                    found_n = sum(1 for r in result.values() if r.value)
+                    print(f"  [probe] field={field.id!r}: directory page covers "
+                          f"{found_n}/{len(entities)} entities", file=sys.stderr)
+                    probes[field.id] = result
+        return probes
+
     # ── Research, with a real-data checkpoint after the first 2 entities ─────
     results: list[EntityResult] = []
     preview_n = min(2, len(entities))
+    probe_data = _run_probes(plan)
+
     for entity in entities[:preview_n]:
-        results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+        results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
+                                       probe_results=probe_data))
 
     if interactive and len(entities) > preview_n:
         _print_real_preview(results, plan)
@@ -617,18 +650,22 @@ def main() -> None:
             print("\n[compiler] Re-generating search queries…", file=sys.stderr)
             plan = enrich_with_queries(plan, claude)
             _show_plan(plan)
-            # Re-run the preview entities with new queries
+            probe_data = _run_probes(plan)
             results = []
             for entity in entities[:preview_n]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
+                                               probe_results=probe_data))
             for entity in entities[preview_n:]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
+                                               probe_results=probe_data))
         else:  # 'y'
             for entity in entities[preview_n:]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
+                                               probe_results=probe_data))
     else:
         for entity in entities[preview_n:]:
-            results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+            results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
+                                           probe_results=probe_data))
 
     # ── Output ────────────────────────────────────────────────────────────────
     write_csv(results, args.output_csv, plan.columns)
