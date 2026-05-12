@@ -29,7 +29,7 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
 
   return (
     <div className="space-y-6">
-      <section className="bg-white border border-slate-200 rounded-lg p-5">
+      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
         <h2 className="font-semibold mb-3">סכמה</h2>
         <div className="text-sm text-slate-500 mb-3">
           סוג ישות: <span className="font-mono text-slate-900" dir="auto">{plan.entity_type}</span>
@@ -62,7 +62,7 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
         </div>
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-lg p-5">
+      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
         <h2 className="font-semibold mb-3">ביקורת בהירות שדות</h2>
         {audit.all_clear ? (
           <div className="text-sm text-emerald-700">✓ כל השדות נראים ברורים.</div>
@@ -84,7 +84,7 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
         )}
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-lg p-5">
+      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
         <h2 className="font-semibold mb-1">תצוגה מקדימה (נתונים מדומים)</h2>
         <p className="text-sm text-slate-500 mb-3">
           ערכים מדומים שמדגימים את צורת הטבלה בלבד — שום דבר עוד לא נחקר.
@@ -126,13 +126,13 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
       )}
 
       <div className="flex justify-between">
-        <button onClick={onBack} className="px-4 py-2 rounded border border-slate-300 text-sm">
+        <button onClick={onBack} className="px-4 py-2.5 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50 transition-colors">
           › חזרה לעריכת השאלה
         </button>
         <button
           onClick={approve}
           disabled={loading}
-          className="bg-slate-900 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
+          className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {loading ? "מתכנן שאילתות חיפוש…" : "אשר והרץ ‹"}
         </button>

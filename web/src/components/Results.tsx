@@ -48,7 +48,7 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
 
   return (
     <div className="space-y-4">
-      <div className="bg-white border border-slate-200 rounded-lg p-5 flex items-center justify-between">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 flex items-center justify-between">
         <div className="text-sm">
           {status === "running" && (
             <>
@@ -62,17 +62,17 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
         </div>
         <div className="flex gap-2">
           {results.length > 0 && (
-            <button onClick={downloadCsv} className="px-3 py-1.5 rounded border border-slate-300 text-sm">
+            <button onClick={downloadCsv} className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50 transition-colors">
               הורד CSV
             </button>
           )}
-          <button onClick={onRestart} className="px-3 py-1.5 rounded border border-slate-300 text-sm">
+          <button onClick={onRestart} className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50 transition-colors">
             שאלה חדשה
           </button>
         </div>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto">
+      <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-auto">
         <table className="text-sm w-full">
           <thead className="bg-slate-100 text-right">
             <tr>

@@ -32,16 +32,16 @@ export default function App() {
     .filter(Boolean);
 
   return (
-    <div className="min-h-screen bg-slate-50 text-slate-900">
-      <header className="bg-white border-b border-slate-200">
-        <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">סוכן מחקר אוטונומי</h1>
-          <nav className="text-sm text-slate-500 flex gap-3">
-            <span className={step === "setup" ? "text-slate-900 font-medium" : ""}>1. הגדרה</span>
-            <span>‹</span>
-            <span className={step === "review" ? "text-slate-900 font-medium" : ""}>2. סקירה</span>
-            <span>‹</span>
-            <span className={step === "results" ? "text-slate-900 font-medium" : ""}>3. תוצאות</span>
+    <div className="min-h-screen text-slate-900">
+      <header className="bg-gradient-to-l from-blue-700 to-blue-600 text-white shadow-sm">
+        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
+          <h1 className="text-xl font-semibold tracking-tight">סוכן מחקר אוטונומי</h1>
+          <nav className="text-sm flex gap-3 items-center">
+            <span className={step === "setup" ? "text-white font-semibold" : "text-blue-100"}>1. הגדרה</span>
+            <span className="text-blue-200">‹</span>
+            <span className={step === "review" ? "text-white font-semibold" : "text-blue-100"}>2. סקירה</span>
+            <span className="text-blue-200">‹</span>
+            <span className={step === "results" ? "text-white font-semibold" : "text-blue-100"}>3. תוצאות</span>
           </nav>
         </div>
       </header>

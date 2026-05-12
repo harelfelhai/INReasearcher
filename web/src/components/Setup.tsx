@@ -64,7 +64,7 @@ export default function Setup(props: Props) {
 
   return (
     <div className="space-y-6">
-      <section className="bg-white border border-slate-200 rounded-lg p-5">
+      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
         <h2 className="font-semibold mb-2">איך לכתוב שאלת מחקר טובה</h2>
         <p className="text-sm text-slate-600 mb-4">
           שאלה טובה = טבלה מוגדרת היטב. כל ישות היא שורה, כל נתון מבוקש הוא עמודה
@@ -92,11 +92,11 @@ export default function Setup(props: Props) {
         </div>
       </section>
 
-      <section className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
+      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4">
         <div>
           <label className="block text-sm font-medium mb-1">שאלת מחקר</label>
           <textarea
-            className="w-full border border-slate-300 rounded p-2 text-sm font-mono"
+            className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
             rows={4}
             placeholder="לדוגמה: עבור כל עיריה ישראלית מצא מי היה ראש העיר ב-1990 ואת כתובת האתר הרשמי."
             value={props.question}
@@ -109,7 +109,7 @@ export default function Setup(props: Props) {
           <div>
             <label className="block text-sm font-medium mb-1">סוג הישות (אופציונלי)</label>
             <input
-              className="w-full border border-slate-300 rounded p-2 text-sm"
+              className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
               placeholder="לדוגמה: עיריה ישראלית"
               value={props.entityType}
               onChange={(e) => props.setEntityType(e.target.value)}
@@ -119,7 +119,7 @@ export default function Setup(props: Props) {
           <div>
             <label className="block text-sm font-medium mb-1">מנוע חיפוש</label>
             <select
-              className="w-full border border-slate-300 rounded p-2 text-sm"
+              className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
               value={props.searchEngine}
               onChange={(e) => props.setSearchEngine(e.target.value as SearchEngine)}
             >
@@ -134,7 +134,7 @@ export default function Setup(props: Props) {
         <div>
           <label className="block text-sm font-medium mb-1">ישויות (אחת בכל שורה)</label>
           <textarea
-            className="w-full border border-slate-300 rounded p-2 text-sm font-mono"
+            className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
             rows={6}
             placeholder={"תל אביב\nחיפה\nירושלים"}
             value={props.entitiesText}
@@ -173,7 +173,7 @@ export default function Setup(props: Props) {
           <button
             onClick={build}
             disabled={loading || !props.question.trim()}
-            className="bg-slate-900 text-white px-4 py-2 rounded text-sm font-medium disabled:opacity-50"
+            className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-lg text-sm font-semibold shadow-sm transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? "בונה סכמה…" : "בנה סכמה ‹"}
           </button>
