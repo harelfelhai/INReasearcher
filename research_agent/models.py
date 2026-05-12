@@ -9,8 +9,8 @@ class ColumnPlan(BaseModel):
     label_en: str
     type: Literal["person_name", "url", "date", "free_text", "organization", "number"]
     temporal_anchor: Optional[str] = None          # e.g. "1990"
-    search_queries_he: List[str]                   # Hebrew queries with {entity} placeholder
-    search_queries_en: List[str]                   # English queries with {entity} placeholder
+    search_queries_he: List[str] = Field(default_factory=list)   # populated in Phase B2
+    search_queries_en: List[str] = Field(default_factory=list)   # populated in Phase B2
     preferred_source_domains: List[str] = Field(default_factory=list)
     min_corroborations: int = 1                    # independent domains required
     depends_on: Optional[str] = None               # id of field whose value must resolve first
@@ -70,3 +70,32 @@ class ExecutableResearchPlan(BaseModel):
     """Wrapper that signals the prompt passed the preflight check."""
     is_executable: Literal[True] = True
     plan: ResearchPlan
+
+
+# ── Phase C: Field-clarity Audit ─────────────────────────────────────────────
+
+class FieldAuditIssue(BaseModel):
+    field_id: str
+    issue_kind: Literal[
+        "unbounded",         # e.g. "career path" — no single bounded answer
+        "subjective",        # e.g. "best mayor" — no objective answer
+        "missing_anchor",    # historical field with no year/period
+        "ambiguous_format",  # e.g. "name" — full? nickname? first only?
+        "no_canonical_source",  # no obvious authoritative source exists
+    ]
+    explanation_he: str
+    explanation_en: str
+    suggested_fix_he: str
+    suggested_fix_en: str
+
+
+class FieldAuditReport(BaseModel):
+    all_clear: bool
+    issues: List[FieldAuditIssue] = Field(default_factory=list)
+
+
+# ── Step 8: Mock-data preview ─────────────────────────────────────────────────
+
+class MockRow(BaseModel):
+    entity_name: str
+    values: Dict[str, str]   # field_id -> mock value (clearly synthetic)

@@ -27,7 +27,12 @@ from dotenv import load_dotenv
 import anthropic
 from tavily import TavilyClient
 
-from research_agent.compiler import compile_research_plan
+from research_agent.compiler import (
+    compile_schema,
+    audit_schema,
+    generate_mock_rows,
+    enrich_with_queries,
+)
 from research_agent.extractor import (
     search_and_extract, MockTavilyClient, DuckDuckGoClient,
     WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
@@ -40,6 +45,8 @@ from research_agent.models import (
     ClarificationRequest,
     ExecutableResearchPlan,
     ResearchPlan,
+    FieldAuditReport,
+    MockRow,
 )
 
 load_dotenv()
@@ -47,21 +54,44 @@ load_dotenv()
 # ── Guided prompting helpers ──────────────────────────────────────────────────
 
 _PROMPT_GUIDE = """\
-╔══════════════════════════════════════════════════════════════════╗
-║          Autonomous Research Agent — Prompt Guide               ║
-╠══════════════════════════════════════════════════════════════════╣
-║  A good research question must specify:                         ║
-║                                                                  ║
-║  1. ENTITY TYPE   What kind of thing? (municipality, politician) ║
-║  2. FIELDS        What specific data points do you need?         ║
-║  3. TIMEFRAME     Historical or current? Which year?             ║
-║  4. SCOPE         Israel only? Global? Hebrew sources?           ║
-║                                                                  ║
-║  Example (weak):   "Tell me about Israeli mayors"               ║
-║  Example (strong): "For each Israeli municipality, find who     ║
-║                    served as mayor in 1990, their IDF unit,     ║
-║                    and a link to the official municipal record." ║
-╚══════════════════════════════════════════════════════════════════╝
+╔══════════════════════════════════════════════════════════════════════╗
+║          Autonomous Research Agent — Prompt Guide                   ║
+╠══════════════════════════════════════════════════════════════════════╣
+║                                                                      ║
+║  A good question = a clearly-defined TABLE. The agent will:          ║
+║    • Treat each entity as a row                                      ║
+║    • Treat each requested data point as a column                     ║
+║    • Find one verifiable value per cell, with a source URL + quote   ║
+║                                                                      ║
+║  Every column needs:                                                 ║
+║    1. A SINGLE answer (not a list, not a paragraph)                  ║
+║    2. A TIMEFRAME if historical (e.g. "in 1990", not "historically") ║
+║    3. A CANONICAL source someone could plausibly look at             ║
+║    4. An OBJECTIVE answer (not "best", "most important")             ║
+║                                                                      ║
+╠══════════════════════════════════════════════════════════════════════╣
+║  ✓ GOOD examples                                                    ║
+║                                                                      ║
+║  "For each Israeli municipality, find: (a) who served as mayor in    ║
+║   1990 (full name), (b) the official municipality website URL."      ║
+║   → bounded fields, temporal anchor, clear sources.                  ║
+║                                                                      ║
+║  "For each member of the 25th Knesset, find: party, faction at       ║
+║   election, year first elected."                                     ║
+║   → single values, all available from knesset.gov.il.                ║
+║                                                                      ║
+║  ✗ BAD examples                                                     ║
+║                                                                      ║
+║  "Tell me about Israeli mayors."                                     ║
+║   → no fields, no scope, no timeframe.                               ║
+║                                                                      ║
+║  "For each city, describe the mayor's career path."                  ║
+║   → "career path" is unbounded (every job ever held?).               ║
+║                                                                      ║
+║  "Who was the best mayor of each city?"                              ║
+║   → "best" is subjective — two researchers would disagree.           ║
+║                                                                      ║
+╚══════════════════════════════════════════════════════════════════════╝
 """
 
 
@@ -98,6 +128,82 @@ def _print_clarification(cr: ClarificationRequest, interactive: bool) -> str | N
     else:
         print("\n   Re-run with a more specific --question and try again.")
         return None
+
+
+def _print_audit(report: FieldAuditReport) -> None:
+    print("\n⚠  Field-clarity audit found issues:\n")
+    for issue in report.issues:
+        print(f"  • [{issue.field_id}]  ({issue.issue_kind})")
+        print(f"    {issue.explanation_he}")
+        print(f"    {issue.explanation_en}")
+        print(f"    Suggested fix: {issue.suggested_fix_en}\n")
+
+
+def _render_table(headers: list[str], rows: list[list[str]], max_col: int = 32) -> str:
+    """Simple ASCII table that handles Hebrew (no padding tricks for RTL)."""
+    def trunc(s: str) -> str:
+        s = (s or "").replace("\n", " ")
+        return s if len(s) <= max_col else s[: max_col - 1] + "…"
+
+    cols = [trunc(h) for h in headers]
+    body = [[trunc(c) for c in r] for r in rows]
+    widths = [max(len(c) for c in [cols[i]] + [r[i] for r in body])
+              for i in range(len(cols))]
+    sep = "+" + "+".join("-" * (w + 2) for w in widths) + "+"
+    def fmt(cells): return "| " + " | ".join(c.ljust(w) for c, w in zip(cells, widths)) + " |"
+
+    out = [sep, fmt(cols), sep]
+    out += [fmt(r) for r in body]
+    out.append(sep)
+    return "\n".join(out)
+
+
+def _print_mock_preview(plan: ResearchPlan, rows: list[MockRow]) -> None:
+    print("\n┌──────────────────────────────────────────────────────────────────┐")
+    print("│  Mock preview — fake data showing your table's SHAPE             │")
+    print("│  (values are illustrative; nothing has been searched yet)        │")
+    print("└──────────────────────────────────────────────────────────────────┘")
+    headers = ["entity"] + [c.id for c in plan.columns]
+    body = [
+        [r.entity_name] + [r.values.get(c.id, "—") for c in plan.columns]
+        for r in rows
+    ]
+    print(_render_table(headers, body))
+
+
+def _print_real_preview(results: list[EntityResult], plan: ResearchPlan) -> None:
+    print("\n┌──────────────────────────────────────────────────────────────────┐")
+    print("│  Real preview — actual values for the first entities             │")
+    print("└──────────────────────────────────────────────────────────────────┘")
+    headers = ["entity"] + [c.id for c in plan.columns] + ["flags"]
+    body = []
+    for r in results:
+        row = [r.entity_name]
+        for c in plan.columns:
+            cell = r.cells.get(c.id)
+            if cell is None or cell.value is None:
+                row.append("✗ NOT_FOUND")
+            else:
+                row.append(f"{cell.value} [{cell.confidence}]")
+        row.append(",".join(r.row_flags))
+        body.append(row)
+    print(_render_table(headers, body, max_col=36))
+
+
+def _ask(prompt: str, choices: list[str], default: str | None = None) -> str:
+    """Prompt the user; returns the chosen single-letter code (lower)."""
+    suffix = f"[{'/'.join(choices)}]"
+    if default:
+        suffix = suffix.replace(default, default.upper())
+    while True:
+        try:
+            ans = input(f"  {prompt} {suffix} > ").strip().lower()
+        except (KeyboardInterrupt, EOFError):
+            return "q"
+        if not ans and default:
+            return default
+        if ans in choices:
+            return ans
 
 
 def _show_plan(plan: ResearchPlan) -> None:
@@ -387,28 +493,95 @@ def main() -> None:
     question = args.question
     entity_type = args.entity_type
     interactive = sys.stdin.isatty()
-    max_clarification_rounds = 3
+    max_rounds = 3
+
+    if interactive:
+        print(_PROMPT_GUIDE)
 
     plan: ResearchPlan | None = None
 
-    for attempt in range(1, max_clarification_rounds + 1):
-        print(f"\n[compiler] Evaluating research question (attempt {attempt})…", file=sys.stderr)
+    for attempt in range(1, max_rounds + 1):
+        print(f"\n[compiler] Building schema (attempt {attempt})…", file=sys.stderr)
 
-        result = compile_research_plan(question, entity_type, claude, memory=memory)
+        # Phase A + B1: preflight & bare schema
+        schema_result = compile_schema(question, entity_type, claude, memory=memory)
 
-        if isinstance(result, ClarificationRequest):
-            refined = _print_clarification(result, interactive)
+        if isinstance(schema_result, ClarificationRequest):
+            refined = _print_clarification(schema_result, interactive)
             if refined:
                 question = refined
                 continue
-            else:
-                sys.exit(1)
-        else:
-            plan = result.plan
-            break
-    else:
-        sys.exit("Could not produce an executable plan after clarification attempts.")
+            sys.exit(1)
 
+        schema_plan = schema_result.plan
+        _show_plan(schema_plan)
+
+        # Phase C: field-clarity audit
+        print("\n[compiler] Auditing field clarity…", file=sys.stderr)
+        audit = audit_schema(schema_plan, claude)
+
+        if not audit.all_clear:
+            _print_audit(audit)
+            if interactive:
+                choice = _ask(
+                    "Refine the question, or proceed anyway?",
+                    ["r", "p", "q"],
+                    default="r",
+                )
+                if choice == "q":
+                    sys.exit(0)
+                if choice == "r":
+                    try:
+                        refined = input("  Enter refined question:\n  > ").strip()
+                    except (KeyboardInterrupt, EOFError):
+                        sys.exit(1)
+                    if refined:
+                        question = refined
+                        continue
+                # 'p' falls through to mock preview, marking issues with LOW later
+                print("  → Proceeding with flagged fields (will be marked LOW).")
+        else:
+            print("  ✓ All fields look clear.", file=sys.stderr)
+
+        # Phase D: mock-data preview
+        print("\n[compiler] Generating mock-data preview…", file=sys.stderr)
+        try:
+            mock_rows = generate_mock_rows(schema_plan, claude)
+        except Exception as exc:
+            print(f"  (mock preview failed: {exc} — skipping)", file=sys.stderr)
+            mock_rows = []
+
+        if mock_rows:
+            _print_mock_preview(schema_plan, mock_rows)
+
+        if not interactive:
+            plan = schema_plan
+            break
+
+        choice = _ask(
+            "Does this table match what you want?",
+            ["y", "r", "q"],
+            default="y",
+        )
+        if choice == "q":
+            sys.exit(0)
+        if choice == "r":
+            try:
+                refined = input("  Enter refined question:\n  > ").strip()
+            except (KeyboardInterrupt, EOFError):
+                sys.exit(1)
+            if refined:
+                question = refined
+                continue
+
+        plan = schema_plan
+        break
+    else:
+        sys.exit("Could not produce an approved schema after clarification attempts.")
+
+    # Phase B2: enrich with search queries (only NOW, after schema is approved)
+    print("\n[compiler] Generating search queries for approved schema…", file=sys.stderr)
+    plan = enrich_with_queries(plan, claude)
     _show_plan(plan)
 
     if args.plan_only:
@@ -425,11 +598,37 @@ def main() -> None:
 
     print(f"\n[start] {len(entities)} entities × {len(plan.columns)} fields", file=sys.stderr)
 
-    # ── Research ──────────────────────────────────────────────────────────────
+    # ── Research, with a real-data checkpoint after the first 2 entities ─────
     results: list[EntityResult] = []
-    for entity in entities:
-        row = research_entity(entity, plan, tavily, claude, memory, args.verbose)
-        results.append(row)
+    preview_n = min(2, len(entities))
+    for entity in entities[:preview_n]:
+        results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+
+    if interactive and len(entities) > preview_n:
+        _print_real_preview(results, plan)
+        print("\n  How does this look?")
+        print("    [y] continue with the remaining entities")
+        print("    [r] stop and re-plan search queries (keeps schema)")
+        print("    [q] stop here, save what we have")
+        choice = _ask("", ["y", "r", "q"], default="y")
+        if choice == "q":
+            pass  # fall through to output
+        elif choice == "r":
+            print("\n[compiler] Re-generating search queries…", file=sys.stderr)
+            plan = enrich_with_queries(plan, claude)
+            _show_plan(plan)
+            # Re-run the preview entities with new queries
+            results = []
+            for entity in entities[:preview_n]:
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+            for entity in entities[preview_n:]:
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+        else:  # 'y'
+            for entity in entities[preview_n:]:
+                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
+    else:
+        for entity in entities[preview_n:]:
+            results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose))
 
     # ── Output ────────────────────────────────────────────────────────────────
     write_csv(results, args.output_csv, plan.columns)
