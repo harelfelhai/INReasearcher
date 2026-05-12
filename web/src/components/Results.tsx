@@ -52,35 +52,35 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
         <div className="text-sm">
           {status === "running" && (
             <>
-              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 mr-2 animate-pulse" />
-              Running… {results.length}/{entities.length} done
-              {current && <span className="text-slate-500"> · current: <span dir="auto">{current}</span></span>}
+              <span className="inline-block w-2 h-2 rounded-full bg-emerald-500 ml-2 animate-pulse" />
+              מריץ… {results.length}/{entities.length} הושלמו
+              {current && <span className="text-slate-500"> · כעת: <span dir="auto">{current}</span></span>}
             </>
           )}
-          {status === "done" && <span className="text-emerald-700">✓ Done — {results.length} entities</span>}
-          {status === "error" && <span className="text-rose-700">Error: {errorMsg}</span>}
+          {status === "done" && <span className="text-emerald-700">✓ הסתיים — {results.length} ישויות</span>}
+          {status === "error" && <span className="text-rose-700">שגיאה: {errorMsg}</span>}
         </div>
         <div className="flex gap-2">
           {results.length > 0 && (
             <button onClick={downloadCsv} className="px-3 py-1.5 rounded border border-slate-300 text-sm">
-              Download CSV
+              הורד CSV
             </button>
           )}
           <button onClick={onRestart} className="px-3 py-1.5 rounded border border-slate-300 text-sm">
-            New question
+            שאלה חדשה
           </button>
         </div>
       </div>
 
       <div className="bg-white border border-slate-200 rounded-lg overflow-x-auto">
         <table className="text-sm w-full">
-          <thead className="bg-slate-100 text-left">
+          <thead className="bg-slate-100 text-right">
             <tr>
-              <th className="p-2">entity</th>
+              <th className="p-2">ישות</th>
               {plan.columns.map((c) => (
                 <th key={c.id} className="p-2 font-mono">{c.id}</th>
               ))}
-              <th className="p-2">flags</th>
+              <th className="p-2">הערות</th>
             </tr>
           </thead>
           <tbody>
@@ -90,7 +90,7 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
                 {plan.columns.map((c) => {
                   const cell = r.cells[c.id];
                   if (!cell || cell.value === null) {
-                    return <td key={c.id} className="p-2 text-slate-400">NOT_FOUND</td>;
+                    return <td key={c.id} className="p-2 text-slate-400">לא נמצא</td>;
                   }
                   return (
                     <td key={c.id} className="p-2 align-top">
@@ -106,7 +106,7 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
                               rel="noreferrer"
                               className="text-blue-600 hover:underline"
                             >
-                              source
+                              מקור
                             </a>
                           </>
                         )}

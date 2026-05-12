@@ -35,13 +35,13 @@ export default function App() {
     <div className="min-h-screen bg-slate-50 text-slate-900">
       <header className="bg-white border-b border-slate-200">
         <div className="max-w-5xl mx-auto px-6 py-4 flex items-center justify-between">
-          <h1 className="text-lg font-semibold">Autonomous Research Agent</h1>
+          <h1 className="text-lg font-semibold">סוכן מחקר אוטונומי</h1>
           <nav className="text-sm text-slate-500 flex gap-3">
-            <span className={step === "setup" ? "text-slate-900 font-medium" : ""}>1. Setup</span>
-            <span>›</span>
-            <span className={step === "review" ? "text-slate-900 font-medium" : ""}>2. Review</span>
-            <span>›</span>
-            <span className={step === "results" ? "text-slate-900 font-medium" : ""}>3. Results</span>
+            <span className={step === "setup" ? "text-slate-900 font-medium" : ""}>1. הגדרה</span>
+            <span>‹</span>
+            <span className={step === "review" ? "text-slate-900 font-medium" : ""}>2. סקירה</span>
+            <span>‹</span>
+            <span className={step === "results" ? "text-slate-900 font-medium" : ""}>3. תוצאות</span>
           </nav>
         </div>
       </header>
