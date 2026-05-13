@@ -39,6 +39,7 @@ from research_agent.compiler import (
 )
 from research_agent.extractor import (
     search_and_extract,
+    search_and_extract_batched,
     probe_field_list,
     verify_probe_extraction,
     MockTavilyClient,
@@ -245,67 +246,82 @@ def api_run(req: RunRequest):
                 await asyncio.sleep(0)
 
             # ── Phase 1: Entity loop ─────────────────────────────────────────
+            # Per entity, we split fields into three lanes:
+            #   (1) probe-covered    → individual extraction + verify (different path)
+            #   (2) regular non-dep  → batched: one Claude call per unique page
+            #   (3) deferred (dep)   → after deps resolve, batched again
             for entity in entities:
                 yield _sse("entity_start", {"entity": entity})
                 resolved: dict[str, str] = {}
                 cells: dict = {}
-                deferred = []
 
-                def process(field):
-                    if field.depends_on and field.depends_on not in resolved:
-                        deferred.append(field)
-                        return
+                def _emit_field_result(fid: str):
+                    return _sse("field_result", {
+                        "entity": entity,
+                        "field_id": fid,
+                        "cell": cells[fid].model_dump(),
+                    })
 
-                    # Use probe result if the directory page found this entity.
-                    # Then run ONE focused verification search to find an
-                    # independent corroborating source (different domain).
-                    if field.id in probe_results:
-                        probe_hit = probe_results[field.id].get(entity)
-                        if probe_hit and probe_hit.value:
-                            extras = verify_probe_extraction(
-                                field, entity, probe_hit, search, claude,
-                            )
-                            cell = verify_field(field, [probe_hit] + extras)
-                            cells[field.id] = cell
-                            if cell.value:
-                                resolved[field.id] = cell.value
-                            return
-
-                    # Fallback: entity-by-entity search
-                    extractions = search_and_extract(
-                        field=field,
-                        entity=entity,
-                        resolved_deps=resolved,
-                        tavily=search,
-                        claude=claude,
-                        memory=None,
+                # Lane 1 — probe-covered fields (one verification search each).
+                probe_handled: set[str] = set()
+                for field in plan.columns:
+                    if field.depends_on:
+                        continue
+                    if field.id not in probe_results:
+                        continue
+                    probe_hit = probe_results[field.id].get(entity)
+                    if not (probe_hit and probe_hit.value):
+                        continue
+                    extras = verify_probe_extraction(
+                        field, entity, probe_hit, search, claude,
                     )
-                    cell = verify_field(field, extractions)
+                    cell = verify_field(field, [probe_hit] + extras)
                     cells[field.id] = cell
                     if cell.value:
                         resolved[field.id] = cell.value
-
-                for field in plan.columns:
-                    process(field)
+                    probe_handled.add(field.id)
+                    yield _emit_field_result(field.id)
                     await asyncio.sleep(0)
-                    if field.id in cells:
-                        yield _sse("field_result", {
-                            "entity": entity,
-                            "field_id": field.id,
-                            "cell": cells[field.id].model_dump(),
-                        })
 
-                for field in list(deferred):
-                    if field.depends_on and field.depends_on not in resolved:
-                        resolved[field.depends_on] = entity
-                    process(field)
-                    await asyncio.sleep(0)
-                    if field.id in cells:
-                        yield _sse("field_result", {
-                            "entity": entity,
-                            "field_id": field.id,
-                            "cell": cells[field.id].model_dump(),
-                        })
+                # Lane 2 — non-deferred fields not handled by probe: batched.
+                lane2_fields = [
+                    f for f in plan.columns
+                    if not f.depends_on and f.id not in probe_handled
+                ]
+                deferred = [f for f in plan.columns if f.depends_on]
+
+                if lane2_fields:
+                    batched = search_and_extract_batched(
+                        fields=lane2_fields, entity=entity,
+                        resolved_deps=resolved, tavily=search,
+                        claude=claude, memory=None,
+                    )
+                    for f in lane2_fields:
+                        cell = verify_field(f, batched.get(f.id, []))
+                        cells[f.id] = cell
+                        if cell.value:
+                            resolved[f.id] = cell.value
+                        yield _emit_field_result(f.id)
+                        await asyncio.sleep(0)
+
+                # Lane 3 — deferred fields. If a dep still didn't resolve, fall
+                # back to the entity name so the deferred field can still try.
+                if deferred:
+                    for f in deferred:
+                        if f.depends_on and f.depends_on not in resolved:
+                            resolved[f.depends_on] = entity
+                    batched_def = search_and_extract_batched(
+                        fields=deferred, entity=entity,
+                        resolved_deps=resolved, tavily=search,
+                        claude=claude, memory=None,
+                    )
+                    for f in deferred:
+                        cell = verify_field(f, batched_def.get(f.id, []))
+                        cells[f.id] = cell
+                        if cell.value:
+                            resolved[f.id] = cell.value
+                        yield _emit_field_result(f.id)
+                        await asyncio.sleep(0)
 
                 row_flags = []
                 not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")

@@ -132,26 +132,8 @@ _BUDGET        = 15000   # total chars sent to Claude per extraction
 _ELLIPSIS      = "\n\n[...]\n\n"
 
 
-def _select_relevant_text(content: str, field, entity: str) -> str:
-    """
-    For short content (≤ _BUDGET chars) → returns as-is.
-    For long content → density-scored windowing:
-      1. Divide the article into overlapping chunks
-      2. Score each chunk by how many DISTINCT field-relevant keywords appear in it
-      3. Take the highest-scoring chunks (most relevant sections) until budget is full
-      4. Always prepend the article intro for context
-
-    Density scoring beats naive per-hit windowing because common words like
-    'ראש העיר' appear hundreds of times and would fill the budget with irrelevant
-    passages. A chunk containing role + year + name scores higher than one that
-    only contains the role keyword once.
-    """
-    if not content:
-        return ""
-    if len(content) <= _BUDGET:
-        return content
-
-    # 1. Build keyword set
+def _field_keywords(field, entity: str) -> set[str]:
+    """Build the keyword set used to score relevance of text chunks for one field."""
     keywords: set[str] = set()
     if entity and len(entity) > 2:
         keywords.add(entity)
@@ -167,15 +149,31 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
         except ValueError:
             pass
     keywords.update(_TYPE_KEYWORDS.get(field.type, []))
-    kw_list = [kw.lower() for kw in keywords if len(kw) >= 2]
+    return keywords
 
+
+def _select_text_by_keywords(
+    content: str,
+    keywords: set[str],
+    label: str,
+    entity: str,
+) -> str:
+    """
+    Density-scored windowing using a pre-built keyword set.
+    Shared between single-field and multi-field extraction.
+    """
+    if not content:
+        return ""
+    if len(content) <= _BUDGET:
+        return content
+
+    kw_list = [kw.lower() for kw in keywords if len(kw) >= 2]
     content_lower = content.lower()
 
     if not kw_list:
         return content[:_BUDGET]
 
-    # 2. Score overlapping chunks by distinct keyword count
-    scored: list[tuple[int, int, int]] = []  # (score, start, end)
+    scored: list[tuple[int, int, int]] = []
     for start in range(0, len(content), _CHUNK_STEP):
         end = min(start + _CHUNK_SIZE, len(content))
         chunk = content_lower[start:end]
@@ -186,11 +184,9 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
     if not scored:
         return content[:_BUDGET]
 
-    # 3. Pick chunks greedily by score (highest first), merge overlapping
     scored.sort(key=lambda x: -x[0])
     selected: list[tuple[int, int]] = []
     for _, s, e in scored:
-        # Merge with any already-selected overlapping interval
         merged_s, merged_e = s, e
         remaining = []
         for ps, pe in selected:
@@ -201,15 +197,11 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
                 remaining.append((ps, pe))
         remaining.append((merged_s, merged_e))
         selected = remaining
-
-    # Sort selected windows by position for output
     selected.sort()
 
-    # 4. Assemble: intro + top windows, up to budget
     intro = content[:_INTRO_CHARS]
     pieces: list[str] = [intro]
     used = len(intro)
-
     for s, e in selected:
         if e <= _INTRO_CHARS:
             continue
@@ -230,10 +222,30 @@ def _select_relevant_text(content: str, field, entity: str) -> str:
     result = "".join(pieces)
     entity_short = entity[:20]
     hit_kws = [kw for kw in kw_list if kw in content_lower][:5]
-    print(f"    [window] {entity_short!r} field={field.id!r}: "
+    print(f"    [window] {entity_short!r} field={label!r}: "
           f"{len(content):,}→{len(result):,} chars, "
           f"top keywords: {hit_kws}")
     return result
+
+
+def _select_relevant_text(content: str, field, entity: str) -> str:
+    """Single-field windowing (back-compat wrapper)."""
+    return _select_text_by_keywords(
+        content, _field_keywords(field, entity), field.id, entity,
+    )
+
+
+def _select_relevant_text_for_fields(content: str, fields: list, entity: str) -> str:
+    """
+    Multi-field windowing: union of all fields' keyword sets, so the selected
+    text window covers passages relevant to ANY of the fields. Used by
+    batch_extract_fields_from_source when one page answers multiple fields.
+    """
+    keywords: set[str] = set()
+    for f in fields:
+        keywords |= _field_keywords(f, entity)
+    label = ",".join(f.id for f in fields)
+    return _select_text_by_keywords(content, keywords, label, entity)
 
 
 def extract_from_source(
@@ -490,6 +502,156 @@ def bulk_extract_from_source(
                 source_domain=_domain(source_url),
                 is_grounded=False,
                 extractor_confidence=0.0,
+            )
+
+    return results
+
+
+# ── Entity-page batch extraction (many fields, one page, one entity) ─────────
+#
+# When the same page appears in the top results for multiple fields of the
+# same entity (e.g. the Wikipedia article for Tel Aviv answers BOTH
+# "mayor_1990" AND "founding_year"), we extract everything in one Claude call
+# instead of one call per field. Cost: same input tokens (content dominates),
+# but one round-trip and one set of output tokens instead of N.
+
+_BATCH_FIELDS_TOOL = {
+    "name": "batch_extract_fields",
+    "description": (
+        "Extract MULTIPLE data fields for ONE entity from a single source page. "
+        "Return one extraction object per requested field_id."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "extractions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "field_id": {
+                            "type": "string",
+                            "description": "Must match one of the requested field IDs exactly.",
+                        },
+                        "value": {
+                            "type": ["string", "null"],
+                            "description": "Extracted value, or null if not in text.",
+                        },
+                        "quote_original": {
+                            "type": ["string", "null"],
+                            "description": "Direct verbatim copy-paste proving the value.",
+                        },
+                        "confidence": {
+                            "type": "number",
+                            "minimum": 0.0,
+                            "maximum": 1.0,
+                        },
+                    },
+                    "required": ["field_id", "value", "quote_original", "confidence"],
+                },
+            },
+        },
+        "required": ["extractions"],
+    },
+}
+
+_BATCH_FIELDS_SYSTEM = """\
+You extract MULTIPLE data fields for ONE entity from a single source page.
+
+For EACH field in the provided list, find the value if it appears in the source.
+All grounding rules apply, per field:
+
+  1. Return a value ONLY if explicitly in the text. No inference, no background knowledge.
+  2. quote_original must be a direct verbatim copy-paste from the source.
+  3. Return null for fields not found — a confident null beats a hallucinated value.
+  4. Match entity specificity — value must refer to the SAME entity requested.
+  5. Match temporal constraints strictly when a year/period is given for the field.
+  6. Return EXACTLY one extraction object per requested field_id — no additions, no omissions."""
+
+
+def batch_extract_fields_from_source(
+    fields: list,
+    entity: str,
+    source_url: str,
+    source_content: str,
+    client: anthropic.Anthropic,
+) -> dict[str, ExtractionResult]:
+    """
+    Extract multiple fields for one entity from a single page in ONE Claude call.
+    Returns {field_id → ExtractionResult}, including not-found results so the
+    caller can record sources for every field.
+    """
+    fields_desc_lines = []
+    for f in fields:
+        anchor = f" (must be valid for {f.temporal_anchor!r})" if f.temporal_anchor else ""
+        fields_desc_lines.append(
+            f"  - field_id={f.id!r}: {f.label_en} / {f.label_he} "
+            f"[type={f.type}]{anchor}"
+        )
+    fields_block = "\n".join(fields_desc_lines)
+
+    selected = _select_relevant_text_for_fields(source_content, fields, entity)
+
+    user_prompt = (
+        f"Entity: {entity}\n\n"
+        f"Fields to extract ({len(fields)}):\n{fields_block}\n\n"
+        f"Source URL: {source_url}\n"
+        f"Source text:\n---\n{selected}\n---\n\n"
+        f"For EACH field above, extract the value for entity '{entity}' from the text. "
+        f"Return exactly {len(fields)} extraction objects — one per field_id."
+    )
+
+    max_tokens = min(4096, 384 + 256 * len(fields))
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        system=_BATCH_FIELDS_SYSTEM,
+        tools=[_BATCH_FIELDS_TOOL],
+        tool_choice={"type": "any"},
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    extractions_raw = tool_block.input.get("extractions", [])
+
+    field_by_id = {f.id: f for f in fields}
+    results: dict[str, ExtractionResult] = {}
+
+    for ext in extractions_raw:
+        fid = ext.get("field_id", "")
+        if fid not in field_by_id:
+            continue
+        raw_value = ext.get("value")
+        raw_quote = ext.get("quote_original")
+        confidence = float(ext.get("confidence", 0.0))
+
+        grounded = False
+        verified_quote = None
+        if raw_value and raw_quote:
+            grounded, verified_quote = is_grounded(raw_quote, source_content)
+            if not grounded:
+                grounded, verified_quote = is_grounded(raw_value, source_content)
+        elif raw_value:
+            grounded, verified_quote = is_grounded(raw_value, source_content)
+
+        results[fid] = ExtractionResult(
+            field_id=fid,
+            value=raw_value if grounded else None,
+            quote_original=verified_quote if grounded else None,
+            source_url=source_url,
+            source_domain=_domain(source_url),
+            is_grounded=grounded,
+            extractor_confidence=confidence if grounded else 0.0,
+        )
+
+    # Fill in any field the LLM forgot to return.
+    for f in fields:
+        if f.id not in results:
+            results[f.id] = ExtractionResult(
+                field_id=f.id,
+                value=None, quote_original=None,
+                source_url=source_url, source_domain=_domain(source_url),
+                is_grounded=False, extractor_confidence=0.0,
             )
 
     return results
@@ -762,6 +924,87 @@ def _inject_wikidata(entity: str, field, results: list, seen_urls: set) -> None:
         print(f"    [wikidata error] {exc}")
 
 
+def _gather_pages_for_field(
+    field: ColumnPlan,
+    entity: str,
+    resolved_deps: dict,
+    tavily: TavilyClient,
+    seen_urls: set[str] | None = None,
+) -> tuple[list[tuple[str, str]], list[ExtractionResult]]:
+    """
+    Run search queries for a field and return raw candidate pages
+    (no LLM extraction yet).
+
+    Returns:
+      pages: list of (url, content) tuples — candidates for extraction.
+      wikidata_results: pre-built ExtractionResults injected from Wikidata
+        (structured facts; do not need LLM extraction).
+
+    The caller can dedupe pages across multiple fields before extracting.
+    """
+    if seen_urls is None:
+        seen_urls = set()
+
+    queries_he = [q.replace("{entity}", entity) for q in field.search_queries_he]
+    queries_en = [q.replace("{entity}", entity) for q in field.search_queries_en[:2]]
+
+    if field.depends_on and field.depends_on in resolved_deps:
+        dep_val = resolved_deps[field.depends_on]
+        if dep_val:
+            bonus = [q.replace("{entity}", dep_val) for q in field.search_queries_he[:2]]
+            queries_he = queries_he + bonus
+
+    pages: list[tuple[str, str]] = []
+    wikidata_results: list[ExtractionResult] = []
+
+    is_wikipedia = isinstance(tavily, WikipediaSearchClient)
+    query_cap = 3 if is_wikipedia else 6
+
+    if is_wikipedia:
+        extra = []
+        if field.type == "person_name" and field.temporal_anchor:
+            extra.append(f"ראשי עיר {entity}")
+
+        direct = tavily.fetch_entity_article(entity, extra_titles=extra)
+
+        if field.type in ("url", "person_name"):
+            canonical = (direct["results"][0]["title"]
+                         if direct.get("results") else entity)
+            _inject_wikidata(canonical, field, wikidata_results, seen_urls)
+
+        for hit in direct.get("results", []):
+            url = hit.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                content = hit.get("raw_content") or hit.get("content", "")
+                if content and len(content) >= 80:
+                    pages.append((url, content))
+
+    for query in (queries_he + queries_en)[:query_cap]:
+        try:
+            response = tavily.search(
+                query=query, max_results=3, include_raw_content=True,
+            )
+        except Exception as exc:
+            print(f"    [search error] {query[:60]!r}: {exc}")
+            continue
+        hits = response.get("results", [])
+        if hits:
+            print(f"    [search] '{query[:55]}' → {len(hits)} result(s): "
+                  + ", ".join(h.get("title", h.get("url", "?"))[:30] for h in hits[:3]))
+        for hit in hits:
+            url = hit.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            content = hit.get("raw_content") or hit.get("content", "")
+            if not content or len(content) < 80:
+                continue
+            pages.append((url, content))
+
+    return pages, wikidata_results
+
+
 def search_and_extract(
     field: ColumnPlan,
     entity: str,
@@ -773,101 +1016,95 @@ def search_and_extract(
     early_stop_on_high: int = 3,
 ) -> list[ExtractionResult]:
     """
-    Run search queries for a field, extract from each result.
+    Single-field search + extract.  Stops early when we accumulate
+    `early_stop_on_high` grounded results.
 
-    Query order: Hebrew queries first (better for Israeli sources),
-    then English. Stops early if we accumulate enough grounded results.
+    For multi-field calls on the same entity prefer search_and_extract_batched,
+    which deduplicates pages that appear in multiple fields' search results.
     """
-    # Substitute entity name into query templates
-    queries_he = [q.replace("{entity}", entity) for q in field.search_queries_he]
-    queries_en = [q.replace("{entity}", entity) for q in field.search_queries_en[:2]]
+    pages, results = _gather_pages_for_field(field, entity, resolved_deps, tavily)
 
-    # If depends_on resolved to a person name, also search by that name
-    if field.depends_on and field.depends_on in resolved_deps:
-        dep_val = resolved_deps[field.depends_on]
-        if dep_val:
-            bonus = [q.replace("{entity}", dep_val) for q in field.search_queries_he[:2]]
-            queries_he = queries_he + bonus
+    for url, content in pages:
+        extraction = extract_from_source(
+            field=field, entity=entity,
+            source_url=url, source_content=content,
+            resolved_deps=resolved_deps, client=claude, memory=memory,
+        )
+        if extraction.is_grounded and extraction.value:
+            results.append(extraction)
+            if len(results) >= early_stop_on_high:
+                return results
 
-    all_queries = queries_he + queries_en
+    return results
 
-    results: list[ExtractionResult] = []
-    seen_urls: set[str] = set()
 
-    is_wikipedia = isinstance(tavily, WikipediaSearchClient)
-    query_cap = 3 if is_wikipedia else 6
+def search_and_extract_batched(
+    fields: list[ColumnPlan],
+    entity: str,
+    resolved_deps: dict,
+    tavily: TavilyClient,
+    claude: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
+) -> dict[str, list[ExtractionResult]]:
+    """
+    Process MULTIPLE fields for one entity with cross-field page deduplication.
 
-    # For Wikipedia: fetch the entity's own article first (most reliable source).
-    # For person_name fields also fetch the dedicated "ראשי עיר {entity}" page
-    # (Wikipedia maintains this separately from the main city article).
-    # For url fields also query Wikidata (P856 = official website property).
-    if is_wikipedia:
-        extra = []
-        if field.type == "person_name" and field.temporal_anchor:
-            extra.append(f"ראשי עיר {entity}")
+      Phase 1: Gather candidate pages for every field (search calls only).
+      Phase 2: Union all unique pages across fields.
+      Phase 3: One multi-field Claude call per unique page (instead of N calls,
+               one per field). For a single-field call we fall back to the
+               existing single-field extractor so memory examples are used.
+      Phase 4: Wikidata-injected results are merged in per field unchanged.
 
-        direct = tavily.fetch_entity_article(entity, extra_titles=extra)
+    Returns {field_id → list[ExtractionResult]} — same shape as N calls to
+    search_and_extract, but each page is processed once, regardless of how
+    many fields surfaced it.
+    """
+    if not fields:
+        return {}
 
-        if field.type in ("url", "person_name"):
-            # Use the canonical Wikipedia title (post-redirect) for Wikidata lookup,
-            # because Wikidata sitelinks use canonical titles not redirect aliases.
-            # e.g. "תל אביב" → Wikidata: not found; "תל אביב-יפו" → Q33935: found
-            canonical = (direct["results"][0]["title"]
-                         if direct.get("results") else entity)
-            _inject_wikidata(canonical, field, results, seen_urls)
-        for hit in direct.get("results", []):
-            url = hit.get("url", "")
-            if url and url not in seen_urls:
-                seen_urls.add(url)
-                content = hit.get("raw_content") or hit.get("content", "")
-                if content and len(content) >= 80:
-                    extraction = extract_from_source(
-                        field=field, entity=entity,
-                        source_url=url, source_content=content,
-                        resolved_deps=resolved_deps, client=claude, memory=memory,
-                    )
-                    if extraction.value:
-                        results.append(extraction)
+    results: dict[str, list[ExtractionResult]] = {f.id: [] for f in fields}
 
-    for query in all_queries[:query_cap]:
-        try:
-            response = tavily.search(
-                query=query,
-                max_results=3,
-                include_raw_content=True,
-            )
-        except Exception as exc:
-            print(f"    [search error] {query[:60]!r}: {exc}")
-            continue
+    # Phase 1 — gather pages per field. SHARED seen_urls avoids re-fetching
+    # the same URL across fields' search phases.
+    shared_seen: set[str] = set()
+    all_urls_with_content: dict[str, str] = {}
+    for field in fields:
+        pages, wikidata_results = _gather_pages_for_field(
+            field, entity, resolved_deps, tavily, seen_urls=shared_seen,
+        )
+        results[field.id].extend(wikidata_results)
+        for url, content in pages:
+            all_urls_with_content.setdefault(url, content)
 
-        hits = response.get("results", [])
-        if hits:
-            print(f"    [search] '{query[:55]}' → {len(hits)} result(s): "
-                  + ", ".join(h.get("title", h.get("url","?"))[:30] for h in hits[:3]))
-        for hit in hits:
-            url = hit.get("url", "")
-            if not url or url in seen_urls:
-                continue
-            seen_urls.add(url)
+    if not all_urls_with_content:
+        return results
 
-            content = hit.get("raw_content") or hit.get("content", "")
-            if not content or len(content) < 80:
-                continue
-
-            extraction = extract_from_source(
-                field=field,
-                entity=entity,
-                source_url=url,
-                source_content=content,
-                resolved_deps=resolved_deps,
+    # Phase 2-3 — single batched extract per page if ≥ 2 fields; else
+    # single-field extractor (uses memory examples).
+    n_pages = len(all_urls_with_content)
+    if len(fields) >= 2:
+        print(f"    [batch] entity={entity!r}: {n_pages} unique page(s) × "
+              f"{len(fields)} field(s) — one batched extract per page")
+        for url, content in all_urls_with_content.items():
+            batch = batch_extract_fields_from_source(
+                fields=fields, entity=entity,
+                source_url=url, source_content=content,
                 client=claude,
-                memory=memory,
             )
-
-            if extraction.is_grounded and extraction.value:
-                results.append(extraction)
-                if len(results) >= early_stop_on_high:
-                    return results   # enough corroborations, stop burning tokens
+            for fid, ext in batch.items():
+                if ext.is_grounded and ext.value:
+                    results[fid].append(ext)
+    else:
+        field = fields[0]
+        for url, content in all_urls_with_content.items():
+            ext = extract_from_source(
+                field=field, entity=entity,
+                source_url=url, source_content=content,
+                resolved_deps=resolved_deps, client=claude, memory=memory,
+            )
+            if ext.is_grounded and ext.value:
+                results[field.id].append(ext)
 
     return results
 

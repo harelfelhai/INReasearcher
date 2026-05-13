@@ -34,7 +34,8 @@ from research_agent.compiler import (
     enrich_with_queries,
 )
 from research_agent.extractor import (
-    search_and_extract, probe_field_list, verify_probe_extraction,
+    search_and_extract, search_and_extract_batched,
+    probe_field_list, verify_probe_extraction,
     MockTavilyClient, DuckDuckGoClient,
     WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
 )
@@ -232,71 +233,76 @@ def research_entity(
 ) -> EntityResult:
     print(f"\n[entity] {entity}", file=sys.stderr)
 
-    resolved_deps: dict[str, str] = {}   # {field_id: resolved_value}
+    resolved_deps: dict[str, str] = {}
     cells = {}
-    deferred = []                          # fields whose depends_on isn't resolved yet
 
-    def _process_field(field):
-        nonlocal resolved_deps
+    def _log_cell(field, cell, note: str = ""):
+        if cell.value:
+            print(f"    → ✓ {cell.value[:60]} [{cell.confidence}{note}]", file=sys.stderr)
+        else:
+            print(f"    → ✗ NOT_FOUND{note}", file=sys.stderr)
+        if verbose and cell.flags:
+            print(f"      flags: {', '.join(cell.flags)}", file=sys.stderr)
 
-        if field.depends_on and field.depends_on not in resolved_deps:
-            deferred.append(field)
-            if verbose:
-                print(f"  [defer] {field.id} waiting on {field.depends_on}", file=sys.stderr)
-            return
-
-        # Use probe result if available for this (field, entity) pair.
-        # Then run a focused verification search for independent corroboration.
-        if probe_results and field.id in probe_results:
-            probe_hit = probe_results[field.id].get(entity)
-            if probe_hit and probe_hit.value:
-                print(f"  [field] {field.id} ({field.label_he}) — probe hit, verifying",
-                      file=sys.stderr)
-                extras = verify_probe_extraction(field, entity, probe_hit, tavily, claude)
-                cell = verify_field(field, [probe_hit] + extras)
-                cells[field.id] = cell
-                if cell.value:
-                    resolved_deps[field.id] = cell.value
-                    print(f"    → ✓ {cell.value[:60]} "
-                          f"[probe+{len(extras)}/{cell.confidence}]",
-                          file=sys.stderr)
-                else:
-                    print(f"    → ✗ verification rejected probe value", file=sys.stderr)
-                return
-
-        print(f"  [field] {field.id} ({field.label_he})", file=sys.stderr)
-        extractions = search_and_extract(
-            field=field,
-            entity=entity,
-            resolved_deps=resolved_deps,
-            tavily=tavily,
-            claude=claude,
-            memory=memory,
-        )
-        cell = verify_field(field, extractions)
+    # Lane 1 — probe-covered fields: handled one at a time (verify_probe path).
+    probe_handled: set[str] = set()
+    for field in plan.columns:
+        if field.depends_on:
+            continue
+        if not (probe_results and field.id in probe_results):
+            continue
+        probe_hit = probe_results[field.id].get(entity)
+        if not (probe_hit and probe_hit.value):
+            continue
+        print(f"  [field] {field.id} ({field.label_he}) — probe hit, verifying",
+              file=sys.stderr)
+        extras = verify_probe_extraction(field, entity, probe_hit, tavily, claude)
+        cell = verify_field(field, [probe_hit] + extras)
         cells[field.id] = cell
-
         if cell.value:
             resolved_deps[field.id] = cell.value
-            status = f"✓ {cell.value[:60]} [{cell.confidence}]"
-        else:
-            status = "✗ NOT_FOUND"
+        probe_handled.add(field.id)
+        _log_cell(field, cell, note=f"/probe+{len(extras)}")
 
-        print(f"    → {status}", file=sys.stderr)
-        if verbose and cell.flags:
-            print(f"    flags: {', '.join(cell.flags)}", file=sys.stderr)
+    # Lane 2 — non-deferred fields not handled by probe: batched.
+    lane2 = [f for f in plan.columns
+             if not f.depends_on and f.id not in probe_handled]
+    deferred = [f for f in plan.columns if f.depends_on]
 
-    # First pass
-    for field in plan.columns:
-        _process_field(field)
+    if lane2:
+        print(f"  [fields] batched extract for {len(lane2)} field(s): "
+              + ", ".join(f.id for f in lane2), file=sys.stderr)
+        batched = search_and_extract_batched(
+            fields=lane2, entity=entity,
+            resolved_deps=resolved_deps, tavily=tavily,
+            claude=claude, memory=memory,
+        )
+        for f in lane2:
+            cell = verify_field(f, batched.get(f.id, []))
+            cells[f.id] = cell
+            if cell.value:
+                resolved_deps[f.id] = cell.value
+            _log_cell(f, cell)
 
-    # Second pass for deferred fields.
-    # If the dependency field came back NOT_FOUND, fall back to the entity
-    # name so dependent fields can still attempt their own searches.
-    for field in list(deferred):
-        if field.depends_on and field.depends_on not in resolved_deps:
-            resolved_deps[field.depends_on] = entity
-        _process_field(field)
+    # Lane 3 — deferred fields. If a dep didn't resolve, fall back to the
+    # entity name so the deferred field can still attempt its search.
+    if deferred:
+        for f in deferred:
+            if f.depends_on and f.depends_on not in resolved_deps:
+                resolved_deps[f.depends_on] = entity
+        print(f"  [fields] batched extract for {len(deferred)} deferred field(s): "
+              + ", ".join(f.id for f in deferred), file=sys.stderr)
+        batched_def = search_and_extract_batched(
+            fields=deferred, entity=entity,
+            resolved_deps=resolved_deps, tavily=tavily,
+            claude=claude, memory=memory,
+        )
+        for f in deferred:
+            cell = verify_field(f, batched_def.get(f.id, []))
+            cells[f.id] = cell
+            if cell.value:
+                resolved_deps[f.id] = cell.value
+            _log_cell(f, cell)
 
     row_flags = []
     not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")
