@@ -1362,6 +1362,12 @@ class DuckDuckGoClient:
     _FETCH_TIMEOUT = 8
     _MAX_CONTENT = 6000
 
+    def __init__(self):
+        # Session-level page cache: a single URL fetched once per run, even if
+        # it appears in search results for multiple entities. Re-windowing per
+        # entity is done downstream by _select_relevant_text.
+        self._page_cache: dict[str, str] = {}
+
     def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
         import urllib.request, time
 
@@ -1398,6 +1404,9 @@ class DuckDuckGoClient:
         import urllib.request
         if not url.startswith("http"):
             return None
+        if url in self._page_cache:
+            print(f"    [page-cache hit] {url[:70]}")
+            return self._page_cache[url]
         try:
             req = urllib.request.Request(url, headers=self._HEADERS)
             with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
@@ -1410,7 +1419,10 @@ class DuckDuckGoClient:
                         html = raw.decode("windows-1255")
                     except Exception:
                         html = raw.decode("utf-8", errors="replace")
-                return _strip_html(html)[: self._MAX_CONTENT]
+                content = _strip_html(html)[: self._MAX_CONTENT]
+                if content:
+                    self._page_cache[url] = content
+                return content
         except Exception:
             return None
 
@@ -1440,6 +1452,8 @@ class SerpApiClient:
 
     def __init__(self, api_key: str):
         self.api_key = api_key
+        # Session-level page cache (see DuckDuckGoClient for rationale).
+        self._page_cache: dict[str, str] = {}
 
     def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
         import urllib.request, urllib.parse, json as _json
@@ -1487,6 +1501,9 @@ class SerpApiClient:
         import urllib.request
         if not url.startswith("http"):
             return None
+        if url in self._page_cache:
+            print(f"    [page-cache hit] {url[:70]}")
+            return self._page_cache[url]
         try:
             req = urllib.request.Request(url, headers=self._HEADERS)
             with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
@@ -1499,7 +1516,10 @@ class SerpApiClient:
                         html = raw.decode("windows-1255")
                     except Exception:
                         html = raw.decode("utf-8", errors="replace")
-                return _strip_html(html)[: self._MAX_CONTENT]
+                content = _strip_html(html)[: self._MAX_CONTENT]
+                if content:
+                    self._page_cache[url] = content
+                return content
         except Exception:
             return None
 
@@ -1537,6 +1557,8 @@ class GoogleSearchClient:
     def __init__(self, api_key: str, cse_id: str):
         self.api_key = api_key
         self.cse_id  = cse_id
+        # Session-level page cache (see DuckDuckGoClient for rationale).
+        self._page_cache: dict[str, str] = {}
 
     def search(self, query: str, max_results: int = 5, **kwargs) -> dict:
         import urllib.request, urllib.parse, json as _json
@@ -1584,6 +1606,9 @@ class GoogleSearchClient:
         import urllib.request
         if not url.startswith("http"):
             return None
+        if url in self._page_cache:
+            print(f"    [page-cache hit] {url[:70]}")
+            return self._page_cache[url]
         try:
             req = urllib.request.Request(url, headers=self._HEADERS)
             with urllib.request.urlopen(req, timeout=self._FETCH_TIMEOUT) as resp:
@@ -1596,7 +1621,10 @@ class GoogleSearchClient:
                         html = raw.decode("windows-1255")
                     except Exception:
                         html = raw.decode("utf-8", errors="replace")
-                return _strip_html(html)[: self._MAX_CONTENT]
+                content = _strip_html(html)[: self._MAX_CONTENT]
+                if content:
+                    self._page_cache[url] = content
+                return content
         except Exception:
             return None
 
