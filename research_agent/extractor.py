@@ -152,15 +152,71 @@ def _field_keywords(field, entity: str) -> set[str]:
     return keywords
 
 
+# ── Strategy-aware scoring ───────────────────────────────────────────────────
+#
+# Field extraction_strategy (from Phase B2) can boost chunks that:
+#   - contain a value_regex match               → +5
+#   - contain the entity name AND a value_anchor → +3
+#
+# A bad/over-narrow strategy can hurt recall, so we apply a safety net:
+# if max chunk score after strategy boosts is below _STRATEGY_FALLBACK_THRESHOLD,
+# we re-score with pure keyword density (existing behavior).
+
+_REGEX_BOOST   = 5
+_ANCHOR_BOOST  = 3
+_STRATEGY_FALLBACK_THRESHOLD = 2
+
+
+def _compile_strategies(strategies: list) -> tuple[list, list[str]]:
+    """
+    Compile regexes (skipping invalid ones) and union all anchors across the
+    given strategies. Returns (compiled_regexes, anchors_lowercased).
+    """
+    compiled = []
+    anchors: list[str] = []
+    for s in strategies:
+        if s is None:
+            continue
+        if s.value_regex:
+            try:
+                compiled.append(re.compile(s.value_regex, re.IGNORECASE))
+            except re.error as exc:
+                print(f"    [window] bad regex {s.value_regex!r}: {exc} — ignored")
+        for a in s.value_anchors_he + s.value_anchors_en:
+            if len(a) >= 2:
+                anchors.append(a.lower())
+    return compiled, anchors
+
+
+def _score_chunk(
+    chunk_lower: str,
+    chunk_original: str,
+    kw_list: list[str],
+    regexes: list,
+    anchors: list[str],
+    entity_lower: str,
+) -> int:
+    """Compose keyword density + strategy boosts into a single chunk score."""
+    score = sum(1 for kw in kw_list if kw in chunk_lower)
+    if regexes and any(r.search(chunk_original) for r in regexes):
+        score += _REGEX_BOOST
+    if anchors and entity_lower and entity_lower in chunk_lower:
+        if any(a in chunk_lower for a in anchors):
+            score += _ANCHOR_BOOST
+    return score
+
+
 def _select_text_by_keywords(
     content: str,
     keywords: set[str],
     label: str,
     entity: str,
+    strategies: list | None = None,
 ) -> str:
     """
-    Density-scored windowing using a pre-built keyword set.
-    Shared between single-field and multi-field extraction.
+    Density-scored windowing using a pre-built keyword set, optionally
+    augmented by ExtractionStrategy hints (regex + anchors). Shared between
+    single-field and multi-field extraction.
     """
     if not content:
         return ""
@@ -169,55 +225,77 @@ def _select_text_by_keywords(
 
     kw_list = [kw.lower() for kw in keywords if len(kw) >= 2]
     content_lower = content.lower()
+    entity_lower = entity.lower() if entity else ""
 
     if not kw_list:
         return content[:_BUDGET]
 
-    scored: list[tuple[int, int, int]] = []
-    for start in range(0, len(content), _CHUNK_STEP):
-        end = min(start + _CHUNK_SIZE, len(content))
-        chunk = content_lower[start:end]
-        score = sum(1 for kw in kw_list if kw in chunk)
-        if score > 0:
-            scored.append((score, start, end))
+    regexes, anchors = _compile_strategies(strategies or [])
+
+    def _score_pass(use_strategy: bool) -> list[tuple[int, int, int]]:
+        out: list[tuple[int, int, int]] = []
+        for start in range(0, len(content), _CHUNK_STEP):
+            end = min(start + _CHUNK_SIZE, len(content))
+            chunk_lower = content_lower[start:end]
+            if use_strategy:
+                chunk_original = content[start:end]
+                s = _score_chunk(
+                    chunk_lower, chunk_original, kw_list, regexes, anchors, entity_lower,
+                )
+            else:
+                s = sum(1 for kw in kw_list if kw in chunk_lower)
+            if s > 0:
+                out.append((s, start, end))
+        return out
+
+    strategy_active = bool(regexes or anchors)
+    scored = _score_pass(use_strategy=strategy_active)
+
+    # Safety net: if a strategy was active but produced essentially no signal,
+    # re-score with pure keyword density so a bad strategy can't tank recall.
+    if strategy_active and (not scored or max(s[0] for s in scored) < _STRATEGY_FALLBACK_THRESHOLD):
+        print(f"    [window] strategy gave weak signal for field={label!r}; "
+              f"falling back to pure keyword density")
+        scored = _score_pass(use_strategy=False)
 
     if not scored:
         return content[:_BUDGET]
 
+    # Greedy top-K by score, rejecting overlap with already-picked chunks.
+    # This lets a high-score chunk far in the document beat a swarm of
+    # low-score filler chunks near the top.
     scored.sort(key=lambda x: -x[0])
-    selected: list[tuple[int, int]] = []
-    for _, s, e in scored:
-        merged_s, merged_e = s, e
-        remaining = []
-        for ps, pe in selected:
-            if merged_s <= pe and ps <= merged_e:
-                merged_s = min(merged_s, ps)
-                merged_e = max(merged_e, pe)
-            else:
-                remaining.append((ps, pe))
-        remaining.append((merged_s, merged_e))
-        selected = remaining
-    selected.sort()
-
     intro = content[:_INTRO_CHARS]
-    pieces: list[str] = [intro]
     used = len(intro)
-    for s, e in selected:
+    picked: list[tuple[int, int]] = []   # (start, end) — output order normalised at end
+
+    for score, s, e in scored:
         if e <= _INTRO_CHARS:
             continue
         if s < _INTRO_CHARS:
             s = _INTRO_CHARS
-        section = content[s:e]
+
+        # Reject if this chunk overlaps a higher-scoring chunk we already took.
+        if any(s < pe and ps < e for ps, pe in picked):
+            continue
+
+        section_len = e - s
         gap = len(_ELLIPSIS)
-        if used + len(section) + gap > _BUDGET:
+        if used + section_len + gap > _BUDGET:
             remaining_budget = _BUDGET - used - gap
             if remaining_budget > 200:
-                pieces.append(_ELLIPSIS)
-                pieces.append(section[:remaining_budget])
+                picked.append((s, s + remaining_budget))
+                used += remaining_budget + gap
             break
+
+        picked.append((s, e))
+        used += section_len + gap
+
+    picked.sort()
+    pieces: list[str] = [intro]
+    for s, e in picked:
         pieces.append(_ELLIPSIS)
-        pieces.append(section)
-        used += len(section) + gap
+        pieces.append(content[s:e])
 
     result = "".join(pieces)
     entity_short = entity[:20]
@@ -229,23 +307,29 @@ def _select_text_by_keywords(
 
 
 def _select_relevant_text(content: str, field, entity: str) -> str:
-    """Single-field windowing (back-compat wrapper)."""
+    """Single-field windowing — uses the field's extraction_strategy if present."""
+    strategies = [field.extraction_strategy] if field.extraction_strategy else []
     return _select_text_by_keywords(
         content, _field_keywords(field, entity), field.id, entity,
+        strategies=strategies,
     )
 
 
 def _select_relevant_text_for_fields(content: str, fields: list, entity: str) -> str:
     """
-    Multi-field windowing: union of all fields' keyword sets, so the selected
-    text window covers passages relevant to ANY of the fields. Used by
-    batch_extract_fields_from_source when one page answers multiple fields.
+    Multi-field windowing: union of all fields' keyword sets AND strategies, so
+    chunks relevant to ANY field still surface. Used by batch_extract_fields_from_source.
     """
     keywords: set[str] = set()
+    strategies = []
     for f in fields:
         keywords |= _field_keywords(f, entity)
+        if f.extraction_strategy:
+            strategies.append(f.extraction_strategy)
     label = ",".join(f.id for f in fields)
-    return _select_text_by_keywords(content, keywords, label, entity)
+    return _select_text_by_keywords(
+        content, keywords, label, entity, strategies=strategies,
+    )
 
 
 def extract_from_source(

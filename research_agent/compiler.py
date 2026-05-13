@@ -25,6 +25,7 @@ from .models import (
     ClarificationQuestion,
     ClarificationRequest,
     ExecutableResearchPlan,
+    ExtractionStrategy,
     FieldAuditIssue,
     FieldAuditReport,
     MockRow,
@@ -309,6 +310,44 @@ _QUERIES_TOOL = {
                                 "Example: 'רשימת ראשי ערים ישראל 1990' or 'ראשי עיריות ישראל 1990 טבלה'."
                             ),
                         },
+                        "extraction_strategy": {
+                            "type": "object",
+                            "description": (
+                                "Optional hints that help the page-windowing algorithm "
+                                "find the relevant section of a long page. All fields "
+                                "optional — leave a field out when no good hint exists."
+                            ),
+                            "properties": {
+                                "value_regex": {
+                                    "type": "string",
+                                    "description": (
+                                        "Python regex matching the literal value format. "
+                                        "Be CONSERVATIVE — too-narrow regex hurts recall. "
+                                        "Examples: r'https?://\\S+\\.(gov|muni|org)\\.il' for "
+                                        "Israeli gov URLs; r'\\b\\d{4}\\b' for years. "
+                                        "Leave blank for free_text and person_name."
+                                    ),
+                                },
+                                "value_anchors_he": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "2-5 Hebrew phrases that typically appear within "
+                                        "~100 chars of the value. CONTEXT cues, not the "
+                                        "value itself. e.g. for mayor 1990: "
+                                        "['ראש העיר', 'כיהן בין', 'נבחר לראש']"
+                                    ),
+                                },
+                                "value_anchors_en": {
+                                    "type": "array",
+                                    "items": {"type": "string"},
+                                    "description": (
+                                        "2-5 English context phrases. e.g. for founding "
+                                        "year: ['founded in', 'established in', 'incorporated']"
+                                    ),
+                                },
+                            },
+                        },
                     },
                     "required": [
                         "id",
@@ -345,6 +384,20 @@ query. Do not default to a stock list.
   - URLs / reference links:              min_corroborations: 1
   - Free text / descriptive:             min_corroborations: 1
   - Numerical / statistical:             min_corroborations: 2
+
+═══ Extraction strategy ═══
+For each field, optionally fill extraction_strategy to guide page windowing:
+  - value_regex: a Python regex matching the value's literal format.
+    BE CONSERVATIVE — bad regex tanks recall. Good cases:
+      url (Israeli gov):  r'https?://\S+\.(gov|muni|org)\.il'
+      year:               r'\b\d{4}\b'
+      ID number:          r'\b\d{8,9}\b'
+    Skip for free_text and person_name (formats too variable).
+  - value_anchors_he / value_anchors_en: 2-5 short context phrases that
+    typically appear NEAR the value (within ~100 chars). NOT the value itself.
+    Examples for mayor in 1990: ['ראש העיר', 'כיהן בין', 'served as mayor']
+    Examples for founding year: ['נוסדה', 'הוקמה בשנת', 'founded in']
+  - Omit any sub-field you don't have a confident hint for.
 
 ═══ Directory probe query ═══
 For EVERY field, also generate directory_probe_query_he — a single entity-agnostic
@@ -520,6 +573,15 @@ def enrich_with_queries(
     enriched_columns: list[ColumnPlan] = []
     for col in plan.columns:
         enrich = enrichment_by_id.get(col.id, {})
+
+        strategy_dict = enrich.get("extraction_strategy") or {}
+        # Drop empty sub-fields so we don't store noise on the column.
+        strategy_clean = {
+            k: v for k, v in strategy_dict.items()
+            if v not in ("", [], None)
+        }
+        strategy = ExtractionStrategy(**strategy_clean) if strategy_clean else None
+
         enriched_columns.append(
             col.model_copy(update={
                 "search_queries_he": enrich.get("search_queries_he", []),
@@ -529,6 +591,7 @@ def enrich_with_queries(
                     "min_corroborations", col.min_corroborations
                 ),
                 "directory_probe_query_he": enrich.get("directory_probe_query_he") or None,
+                "extraction_strategy": strategy,
             })
         )
     return ResearchPlan(
