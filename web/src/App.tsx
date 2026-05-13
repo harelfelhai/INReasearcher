@@ -9,11 +9,16 @@ import type {
 import Setup from "./components/Setup";
 import SchemaReview from "./components/SchemaReview";
 import Results from "./components/Results";
+import Login from "./components/Login";
+import UserDashboard from "./components/UserDashboard";
+import AdminDashboard from "./components/AdminDashboard";
+import { AuthProvider, useAuth } from "./auth";
 
-type Step = "setup" | "review" | "results";
+type View = "dashboard" | "setup" | "review" | "results" | "admin";
 
-export default function App() {
-  const [step, setStep] = useState<Step>("setup");
+function AppShell() {
+  const { user, loading, logout } = useAuth();
+  const [view, setView] = useState<View>("dashboard");
 
   const [question, setQuestion] = useState("");
   const [entityType, setEntityType] = useState("");
@@ -31,23 +36,82 @@ export default function App() {
     .map((s) => s.trim())
     .filter(Boolean);
 
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center text-slate-500">
+        טוען…
+      </div>
+    );
+  }
+
+  if (!user) return <Login />;
+
+  const isAdmin = user.role === "admin";
+
+  function newResearch() {
+    setQuestion("");
+    setEntityType("");
+    setEntitiesText("");
+    setPlan(null);
+    setAudit(null);
+    setMockRows([]);
+    setEnrichedPlan(null);
+    setClarification(null);
+    setView("setup");
+  }
+
   return (
     <div className="min-h-screen text-slate-900">
       <header className="bg-gradient-to-l from-blue-700 to-blue-600 text-white shadow-sm">
-        <div className="max-w-5xl mx-auto px-6 py-5 flex items-center justify-between">
-          <h1 className="text-xl font-semibold tracking-tight">סוכן מחקר אוטונומי</h1>
-          <nav className="text-sm flex gap-3 items-center">
-            <span className={step === "setup" ? "text-white font-semibold" : "text-blue-100"}>1. הגדרה</span>
-            <span className="text-blue-200">‹</span>
-            <span className={step === "review" ? "text-white font-semibold" : "text-blue-100"}>2. סקירה</span>
-            <span className="text-blue-200">‹</span>
-            <span className={step === "results" ? "text-white font-semibold" : "text-blue-100"}>3. תוצאות</span>
+        <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">סוכן מחקר אוטונומי</h1>
+            <p className="text-xs text-blue-100 mt-0.5">
+              {isAdmin ? "ממשק מנהל" : "ממשק חוקר"} ·{" "}
+              <span dir="ltr">{user.username}</span> · יתרה:{" "}
+              <span className="font-mono">${user.credit_balance.toFixed(2)}</span>
+            </p>
+          </div>
+          <nav className="text-sm flex gap-2 items-center">
+            <button
+              onClick={() => setView("dashboard")}
+              className={`px-2 py-1 rounded ${view === "dashboard" ? "bg-white/20 font-semibold" : "hover:bg-white/10"}`}
+            >
+              היסטוריה
+            </button>
+            <button
+              onClick={newResearch}
+              className={`px-2 py-1 rounded ${view === "setup" || view === "review" || view === "results" ? "bg-white/20 font-semibold" : "hover:bg-white/10"}`}
+            >
+              מחקר חדש
+            </button>
+            {isAdmin && (
+              <button
+                onClick={() => setView("admin")}
+                className={`px-2 py-1 rounded ${view === "admin" ? "bg-white/20 font-semibold" : "hover:bg-white/10"}`}
+              >
+                ניהול משתמשים
+              </button>
+            )}
+            <button
+              onClick={() => {
+                logout();
+                setView("dashboard");
+              }}
+              className="px-2 py-1 rounded hover:bg-white/10"
+            >
+              יציאה
+            </button>
           </nav>
         </div>
       </header>
 
-      <main className="max-w-5xl mx-auto px-6 py-8">
-        {step === "setup" && (
+      <main className="max-w-6xl mx-auto px-6 py-8">
+        {view === "dashboard" && <UserDashboard onNewResearch={newResearch} />}
+
+        {view === "admin" && isAdmin && <AdminDashboard />}
+
+        {view === "setup" && (
           <Setup
             question={question}
             setQuestion={setQuestion}
@@ -63,40 +127,41 @@ export default function App() {
               setPlan(plan);
               setAudit(audit);
               setMockRows(mockRows);
-              if (plan) setStep("review");
+              if (plan) setView("review");
             }}
           />
         )}
 
-        {step === "review" && plan && audit && (
+        {view === "review" && plan && audit && (
           <SchemaReview
             plan={plan}
             audit={audit}
             mockRows={mockRows}
-            onBack={() => setStep("setup")}
+            onBack={() => setView("setup")}
             onApproved={(enriched) => {
               setEnrichedPlan(enriched);
-              setStep("results");
+              setView("results");
             }}
           />
         )}
 
-        {step === "results" && enrichedPlan && (
+        {view === "results" && enrichedPlan && (
           <Results
             plan={enrichedPlan}
             entities={entities}
             searchEngine={searchEngine}
-            onRestart={() => {
-              setStep("setup");
-              setPlan(null);
-              setAudit(null);
-              setMockRows([]);
-              setEnrichedPlan(null);
-              setClarification(null);
-            }}
+            onRestart={() => setView("dashboard")}
           />
         )}
       </main>
     </div>
+  );
+}
+
+export default function App() {
+  return (
+    <AuthProvider>
+      <AppShell />
+    </AuthProvider>
   );
 }

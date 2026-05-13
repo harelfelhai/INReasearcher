@@ -87,3 +87,48 @@ export interface EntityResult {
 }
 
 export type SearchEngine = "wikipedia" | "serpapi" | "duckduckgo" | "mock";
+
+// ── Auth / user management ───────────────────────────────────────────────────
+
+export type Role = "user" | "admin";
+
+export interface AuthUser {
+  id: string;
+  username: string;
+  role: Role;
+  admin_id?: string | null;
+  credit_balance: number;
+  is_active: boolean;
+  created_at: string;
+}
+
+export interface ManagedUser extends AuthUser {
+  session_count: number;
+  total_cost_used: number;
+}
+
+export interface LoginResponse {
+  access_token: string;
+  token_type: "bearer";
+  user_id: string;
+  username: string;
+  role: Role;
+}
+
+export interface ExcelExportOut {
+  id: string;
+  filename: string;
+  created_at: string;
+}
+
+export interface SessionOut {
+  id: string;
+  user_id: string;
+  question: string;
+  entity_type?: string | null;
+  status: string;
+  cost_used: number;
+  created_at: string;
+  completed_at?: string | null;
+  exports: ExcelExportOut[];
+}

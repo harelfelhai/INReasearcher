@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { runResearch } from "../api";
+import { downloadExport, runResearch, type RunDonePayload } from "../api";
 import type { EntityResult, ResearchPlan, SearchEngine } from "../types";
 
 interface Props {
@@ -14,13 +14,14 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
   const [current, setCurrent] = useState<string | null>(null);
   const [status, setStatus] = useState<"running" | "done" | "error">("running");
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [doneInfo, setDoneInfo] = useState<RunDonePayload | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
   useEffect(() => {
     ctrlRef.current = runResearch(plan, entities, searchEngine, {
       onEntityStart: (e) => setCurrent(e),
       onEntityDone: (r) => setResults((prev) => [...prev, r]),
-      onDone: () => { setStatus("done"); setCurrent(null); },
+      onDone: (info) => { setStatus("done"); setCurrent(null); setDoneInfo(info); },
       onError: (m) => { setStatus("error"); setErrorMsg(m); },
     });
     return () => ctrlRef.current?.abort();
@@ -57,10 +58,27 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
               {current && <span className="text-slate-500"> · כעת: <span dir="auto">{current}</span></span>}
             </>
           )}
-          {status === "done" && <span className="text-emerald-700">✓ הסתיים — {results.length} ישויות</span>}
+          {status === "done" && (
+            <span className="text-emerald-700">
+              ✓ הסתיים — {results.length} ישויות
+              {doneInfo && (
+                <span className="text-slate-500 mr-2">
+                  · עלות: <span className="font-mono">${doneInfo.cost_used.toFixed(4)}</span>
+                </span>
+              )}
+            </span>
+          )}
           {status === "error" && <span className="text-rose-700">שגיאה: {errorMsg}</span>}
         </div>
         <div className="flex gap-2">
+          {doneInfo?.export && (
+            <button
+              onClick={() => downloadExport(doneInfo.export!.export_id, doneInfo.export!.filename)}
+              className="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700"
+            >
+              הורד Excel
+            </button>
+          )}
           {results.length > 0 && (
             <button onClick={downloadCsv} className="px-3 py-1.5 rounded-lg border border-slate-300 bg-white text-sm font-medium hover:bg-slate-50 transition-colors">
               הורד CSV

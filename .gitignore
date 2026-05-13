@@ -5,3 +5,12 @@ memory.json
 output.csv
 output.json
 .pytest_cache/
+
+# Runtime data — local DB and per-session Excel exports
+data/
+exports/
+
+# Frontend build artifacts
+web/node_modules/
+web/dist/
+web/tsconfig.tsbuildinfo

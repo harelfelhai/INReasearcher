@@ -1,11 +1,33 @@
 import type {
+  AuthUser,
   ClarificationRequest,
   EntityResult,
   FieldAuditReport,
+  LoginResponse,
+  ManagedUser,
   MockRow,
   ResearchPlan,
   SearchEngine,
+  SessionOut,
 } from "./types";
+
+const TOKEN_KEY = "inr_auth_token";
+
+export function getToken(): string | null {
+  return localStorage.getItem(TOKEN_KEY);
+}
+
+export function setToken(token: string | null): void {
+  if (token) localStorage.setItem(TOKEN_KEY, token);
+  else localStorage.removeItem(TOKEN_KEY);
+}
+
+function authHeaders(): Record<string, string> {
+  const token = getToken();
+  const h: Record<string, string> = { "Content-Type": "application/json" };
+  if (token) h["Authorization"] = `Bearer ${token}`;
+  return h;
+}
 
 const headers = { "Content-Type": "application/json" };
 
@@ -35,12 +57,119 @@ async function readError(r: Response): Promise<string> {
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   let r: Response;
   try {
-    r = await fetch(url, { method: "POST", headers, body: JSON.stringify(body) });
+    r = await fetch(url, { method: "POST", headers: authHeaders(), body: JSON.stringify(body) });
   } catch (e) {
     throw new Error(`Network error: ${(e as Error).message}`);
   }
   if (!r.ok) throw new Error(await readError(r));
   return r.json();
+}
+
+async function getJson<T>(url: string): Promise<T> {
+  let r: Response;
+  try {
+    r = await fetch(url, { headers: authHeaders() });
+  } catch (e) {
+    throw new Error(`Network error: ${(e as Error).message}`);
+  }
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
+}
+
+async function putJson<T>(url: string, body: unknown): Promise<T> {
+  let r: Response;
+  try {
+    r = await fetch(url, { method: "PUT", headers: authHeaders(), body: JSON.stringify(body) });
+  } catch (e) {
+    throw new Error(`Network error: ${(e as Error).message}`);
+  }
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
+}
+
+async function del(url: string): Promise<void> {
+  let r: Response;
+  try {
+    r = await fetch(url, { method: "DELETE", headers: authHeaders() });
+  } catch (e) {
+    throw new Error(`Network error: ${(e as Error).message}`);
+  }
+  if (!r.ok && r.status !== 204) throw new Error(await readError(r));
+}
+
+// ── Auth ────────────────────────────────────────────────────────────────────
+
+export async function login(username: string, password: string): Promise<LoginResponse> {
+  const r = await fetch("/api/auth/login", {
+    method: "POST",
+    headers,
+    body: JSON.stringify({ username, password }),
+  });
+  if (!r.ok) throw new Error(await readError(r));
+  const data = (await r.json()) as LoginResponse;
+  setToken(data.access_token);
+  return data;
+}
+
+export function logout(): void {
+  setToken(null);
+}
+
+export async function fetchMe(): Promise<AuthUser> {
+  return getJson("/api/auth/me");
+}
+
+// ── Admin ───────────────────────────────────────────────────────────────────
+
+export async function listManagedUsers(): Promise<ManagedUser[]> {
+  return getJson("/api/admin/users");
+}
+
+export async function createManagedUser(payload: {
+  username: string;
+  password: string;
+  credit_balance: number;
+}): Promise<AuthUser> {
+  return postJson("/api/admin/users", { ...payload, role: "user" });
+}
+
+export async function updateUserBudget(
+  userId: string,
+  payload: { set_to?: number; add?: number },
+): Promise<AuthUser> {
+  return putJson(`/api/admin/users/${userId}/budget`, payload);
+}
+
+export async function disableUser(userId: string): Promise<void> {
+  return del(`/api/admin/users/${userId}`);
+}
+
+export async function listUserSessions(userId: string): Promise<SessionOut[]> {
+  return getJson(`/api/admin/users/${userId}/sessions`);
+}
+
+// ── User sessions / downloads ───────────────────────────────────────────────
+
+export async function listOwnSessions(): Promise<SessionOut[]> {
+  return getJson("/api/user/sessions");
+}
+
+export function exportDownloadUrl(exportId: string): string {
+  // Used by an anchor's href; auth header isn't attached, so we use a token
+  // query string only if needed. Instead we open in a new tab via fetch+blob.
+  return `/api/user/exports/${exportId}`;
+}
+
+export async function downloadExport(exportId: string, filename: string): Promise<void> {
+  const r = await fetch(exportDownloadUrl(exportId), { headers: authHeaders() });
+  if (!r.ok) throw new Error(await readError(r));
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
 }
 
 export interface CompileResponse {
@@ -69,10 +198,20 @@ export async function enrichPlan(plan: ResearchPlan): Promise<ResearchPlan> {
   return postJson("/api/enrich", { plan });
 }
 
+export interface RunDonePayload {
+  n: number;
+  session_id: string;
+  cost_used: number;
+  tokens_in: number;
+  tokens_out: number;
+  export: { export_id: string; filename: string } | null;
+}
+
 export interface RunEvents {
+  onSessionStarted?: (info: { session_id: string; credit_balance: number }) => void;
   onEntityStart?: (entity: string) => void;
   onEntityDone?: (result: EntityResult) => void;
-  onDone?: () => void;
+  onDone?: (info: RunDonePayload) => void;
   onError?: (msg: string) => void;
 }
 
@@ -92,7 +231,7 @@ export function runResearch(
     try {
       const r = await fetch("/api/run", {
         method: "POST",
-        headers,
+        headers: authHeaders(),
         body: JSON.stringify({ plan, entities, search_engine }),
         signal: ctrl.signal,
       });
@@ -120,9 +259,10 @@ export function runResearch(
           if (!data) continue;
           const payload = JSON.parse(data);
 
-          if (eventName === "entity_start") events.onEntityStart?.(payload.entity);
+          if (eventName === "session_started") events.onSessionStarted?.(payload);
+          else if (eventName === "entity_start") events.onEntityStart?.(payload.entity);
           else if (eventName === "entity_done") events.onEntityDone?.(payload as EntityResult);
-          else if (eventName === "done") events.onDone?.();
+          else if (eventName === "done") events.onDone?.(payload as RunDonePayload);
           else if (eventName === "error") events.onError?.(payload.message);
         }
       }
