@@ -5,6 +5,7 @@ memory.json
 output.csv
 output.json
 .pytest_cache/
+tests/_test_*.db
 
 # Runtime data — local DB and per-session Excel exports
 data/
