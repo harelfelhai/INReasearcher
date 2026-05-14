@@ -74,11 +74,23 @@ def _build_clients_from_cassette(cassette: dict) -> tuple[MockClaude, StubSearch
         search.add(entity_substring, normalised)
 
     claude = MockClaude()
-    # Each tool gets a FIFO queue of responses (entity order matters for
-    # batch_extract_fields — Tel Aviv first, then Haifa).
+    # Each tool gets responses keyed by entity name so parallel entity
+    # processing can't scramble which entity gets which response.
     for tool_name, response_list in cassette["claude"].items():
-        queue = [{"extractions": r["extractions"]} for r in response_list]
-        claude.on(tool_name, queue)
+        if response_list and "for_entity" in response_list[0]:
+            entity_map = {r["for_entity"]: {"extractions": r["extractions"]}
+                          for r in response_list}
+            def _make_handler(em: dict):
+                def _handler(call):
+                    for ename, resp in em.items():
+                        if ename in call.user:
+                            return resp
+                    return next(iter(em.values()))
+                return _handler
+            claude.on(tool_name, _make_handler(entity_map))
+        else:
+            queue = [{"extractions": r["extractions"]} for r in response_list]
+            claude.on(tool_name, queue)
 
     return claude, search
 

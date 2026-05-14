@@ -104,6 +104,75 @@ app.include_router(admin_router)
 app.include_router(user_router)
 
 
+# ── Entity processing helper (module-level so threads can call it) ───────────
+
+def _process_entity_sync(
+    entity: str,
+    plan: ResearchPlan,
+    probe_results: dict,
+    search,
+    claude,
+) -> tuple[str, dict, list]:
+    """Run the three-lane pipeline for one entity. Pure sync — safe to call
+    from a thread pool worker alongside other entities."""
+    resolved: dict[str, str] = {}
+    cells: dict = {}
+
+    # Lane 1 — probe-covered fields
+    probe_handled: set[str] = set()
+    for field in plan.columns:
+        if field.depends_on or field.id not in probe_results:
+            continue
+        probe_hit = probe_results[field.id].get(entity)
+        if not (probe_hit and probe_hit.value):
+            continue
+        extras = verify_probe_extraction(field, entity, probe_hit, search, claude)
+        cell = verify_field(field, [probe_hit] + extras)
+        cells[field.id] = cell
+        if cell.value:
+            resolved[field.id] = cell.value
+        probe_handled.add(field.id)
+
+    # Lane 2 — non-deferred fields not covered by probe
+    lane2_fields = [f for f in plan.columns if not f.depends_on and f.id not in probe_handled]
+    deferred = [f for f in plan.columns if f.depends_on]
+
+    if lane2_fields:
+        batched = search_and_extract_batched(
+            fields=lane2_fields, entity=entity,
+            resolved_deps=resolved, tavily=search,
+            claude=claude, memory=None,
+        )
+        for f in lane2_fields:
+            cell = verify_field(f, batched.get(f.id, []))
+            cells[f.id] = cell
+            if cell.value:
+                resolved[f.id] = cell.value
+
+    # Lane 3 — deferred fields
+    if deferred:
+        for f in deferred:
+            if f.depends_on and f.depends_on not in resolved:
+                resolved[f.depends_on] = entity
+        batched_def = search_and_extract_batched(
+            fields=deferred, entity=entity,
+            resolved_deps=resolved, tavily=search,
+            claude=claude, memory=None,
+        )
+        for f in deferred:
+            cell = verify_field(f, batched_def.get(f.id, []))
+            cells[f.id] = cell
+            if cell.value:
+                resolved[f.id] = cell.value
+
+    row_flags = []
+    not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")
+    if cells and not_found > len(cells) // 2:
+        row_flags.append("majority_not_found")
+
+    return entity, cells, row_flags
+
+
 # ── Error translation ────────────────────────────────────────────────────────
 
 def _translate(exc: Exception) -> tuple[int, str]:
@@ -399,90 +468,44 @@ def api_run(
                             "entities_total": len(entities),
                         })
 
-            # ── Phase 1: Entity loop (three lanes) ───────────────────────────
+            # ── Phase 1: Entity loop (parallel) ──────────────────────────────
+            # Fire entity_start for every entity immediately, then run all
+            # entity pipelines concurrently. entity_done events arrive as
+            # each entity finishes — no waiting for the slowest to unblock
+            # the fastest.
             for entity in entities:
                 yield _sse("entity_start", {"entity": entity})
-                resolved: dict[str, str] = {}
-                cells: dict = {}
+                await asyncio.sleep(0)
 
-                def _emit_field_result(fid: str):
-                    return _sse("field_result", {
-                        "entity": entity,
-                        "field_id": fid,
-                        "cell": cells[fid].model_dump(),
-                    })
-
-                # Lane 1 — probe-covered.
-                probe_handled: set[str] = set()
-                for field in plan.columns:
-                    if field.depends_on or field.id not in probe_results:
-                        continue
-                    probe_hit = probe_results[field.id].get(entity)
-                    if not (probe_hit and probe_hit.value):
-                        continue
-                    extras = verify_probe_extraction(
-                        field, entity, probe_hit, search, claude,
+            entity_tasks = [
+                asyncio.create_task(
+                    asyncio.to_thread(
+                        _process_entity_sync, entity, plan, probe_results, search, claude,
                     )
-                    cell = verify_field(field, [probe_hit] + extras)
-                    cells[field.id] = cell
-                    if cell.value:
-                        resolved[field.id] = cell.value
-                    probe_handled.add(field.id)
-                    yield _emit_field_result(field.id)
-                    await asyncio.sleep(0)
+                )
+                for entity in entities
+            ]
 
-                # Lane 2 — non-deferred fields not handled by probe: batched.
-                lane2_fields = [
-                    f for f in plan.columns
-                    if not f.depends_on and f.id not in probe_handled
-                ]
-                deferred = [f for f in plan.columns if f.depends_on]
-
-                if lane2_fields:
-                    batched = search_and_extract_batched(
-                        fields=lane2_fields, entity=entity,
-                        resolved_deps=resolved, tavily=search,
-                        claude=claude, memory=None,
-                    )
-                    for f in lane2_fields:
-                        cell = verify_field(f, batched.get(f.id, []))
-                        cells[f.id] = cell
-                        if cell.value:
-                            resolved[f.id] = cell.value
-                        yield _emit_field_result(f.id)
-                        await asyncio.sleep(0)
-
-                # Lane 3 — deferred fields.
-                if deferred:
-                    for f in deferred:
-                        if f.depends_on and f.depends_on not in resolved:
-                            resolved[f.depends_on] = entity
-                    batched_def = search_and_extract_batched(
-                        fields=deferred, entity=entity,
-                        resolved_deps=resolved, tavily=search,
-                        claude=claude, memory=None,
-                    )
-                    for f in deferred:
-                        cell = verify_field(f, batched_def.get(f.id, []))
-                        cells[f.id] = cell
-                        if cell.value:
-                            resolved[f.id] = cell.value
-                        yield _emit_field_result(f.id)
-                        await asyncio.sleep(0)
-
-                row_flags = []
-                not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")
-                if cells and not_found > len(cells) // 2:
-                    row_flags.append("majority_not_found")
+            for finished in asyncio.as_completed(entity_tasks):
+                try:
+                    entity_name, cells, row_flags = await finished
+                except Exception as exc:
+                    print(f"\n[error] entity processing failed:", file=sys.stderr)
+                    traceback.print_exc()
+                    _, detail = _translate(exc)
+                    final_status = "failed"
+                    yield _sse("error", {"message": detail})
+                    continue
 
                 results.append(EntityResult(
-                    entity_name=entity, cells=cells, row_flags=row_flags,
+                    entity_name=entity_name, cells=cells, row_flags=row_flags,
                 ))
                 yield _sse("entity_done", {
-                    "entity_name": entity,
+                    "entity_name": entity_name,
                     "cells": {k: v.model_dump() for k, v in cells.items()},
                     "row_flags": row_flags,
                 })
+                await asyncio.sleep(0)
 
         except Exception as exc:
             print(f"\n[error] /api/run stream failed →", file=sys.stderr)

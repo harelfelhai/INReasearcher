@@ -21,6 +21,7 @@ Cost control levers:
 
 import re
 import anthropic
+from concurrent.futures import ThreadPoolExecutor
 from tavily import TavilyClient
 
 from .models import ColumnPlan, ExtractionResult
@@ -1269,15 +1270,23 @@ def _gather_pages_for_field(
                 if content and len(content) >= 80:
                     pages.append((url, content))
 
-    for query in (queries_he + queries_en)[:query_cap]:
+    # Fan out all search queries concurrently — each is independent I/O.
+    all_queries = list((queries_he + queries_en)[:query_cap])
+
+    def _one_search(q: str) -> tuple[str, list]:
         try:
-            response = tavily.search(
-                query=query, max_results=3, include_raw_content=True,
-            )
+            return q, tavily.search(q, max_results=3, include_raw_content=True).get("results", [])
         except Exception as exc:
-            print(f"    [search error] {query[:60]!r}: {exc}")
-            continue
-        hits = response.get("results", [])
+            print(f"    [search error] {q[:60]!r}: {exc}")
+            return q, []
+
+    if all_queries:
+        with ThreadPoolExecutor(max_workers=min(len(all_queries), 4)) as pool:
+            query_results = list(pool.map(_one_search, all_queries))
+    else:
+        query_results = []
+
+    for query, hits in query_results:
         if hits:
             print(f"    [search] '{query[:55]}' → {len(hits)} result(s): "
                   + ", ".join(h.get("title", h.get("url", "?"))[:30] for h in hits[:3]))

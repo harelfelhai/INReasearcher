@@ -6,6 +6,7 @@ per-million-token prices.
 """
 from __future__ import annotations
 
+import threading
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -33,18 +34,22 @@ class UsageTotals:
     calls: int = 0
     per_model: dict = field(default_factory=dict)
 
+    def __post_init__(self):
+        self._lock = threading.Lock()
+
     def add(self, model: str, in_tok: int, out_tok: int) -> None:
-        self.input_tokens += in_tok
-        self.output_tokens += out_tok
-        self.calls += 1
-        p = _price_for(model)
-        cost = (in_tok / 1_000_000.0) * p["in"] + (out_tok / 1_000_000.0) * p["out"]
-        self.cost_usd += cost
-        m = self.per_model.setdefault(model, {"in": 0, "out": 0, "cost": 0.0, "calls": 0})
-        m["in"] += in_tok
-        m["out"] += out_tok
-        m["cost"] += cost
-        m["calls"] += 1
+        with self._lock:
+            self.input_tokens += in_tok
+            self.output_tokens += out_tok
+            self.calls += 1
+            p = _price_for(model)
+            cost = (in_tok / 1_000_000.0) * p["in"] + (out_tok / 1_000_000.0) * p["out"]
+            self.cost_usd += cost
+            m = self.per_model.setdefault(model, {"in": 0, "out": 0, "cost": 0.0, "calls": 0})
+            m["in"] += in_tok
+            m["out"] += out_tok
+            m["cost"] += cost
+            m["calls"] += 1
 
 
 class _TrackedMessages:
