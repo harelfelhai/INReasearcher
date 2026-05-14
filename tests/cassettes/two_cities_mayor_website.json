@@ -1,0 +1,61 @@
+{
+  "_meta": {
+    "description": "Two Israeli cities (Tel Aviv, Haifa), two fields (mayor, website). Each entity has one shared Wikipedia page covering both fields → must trigger the cross-field page-dedup optimisation (1 batch_extract per entity, not 2).",
+    "captured_at": "hand-authored",
+    "model": "claude-sonnet-4-6"
+  },
+  "search": {
+    "Tel Aviv": [
+      {
+        "url": "https://wiki.example/Tel_Aviv",
+        "title": "Tel Aviv — Wikipedia",
+        "raw_content": "Tel Aviv-Yafo is the second-most populous city in Israel. Ron Huldai has served as the mayor of Tel Aviv since 1998 and continues in office. The municipal government operates the official website www.tel-aviv.gov.il where residents access services. Tel Aviv was founded in 1909 as a Jewish suburb of Jaffa. The city is the economic and technological hub of Israel. Padding paragraph to clear minimum content length checks. Padding paragraph to clear minimum content length checks."
+      }
+    ],
+    "Haifa": [
+      {
+        "url": "https://wiki.example/Haifa",
+        "title": "Haifa — Wikipedia",
+        "raw_content": "Haifa is the third-largest city in Israel and the largest in the north. Yona Yahav serves as the mayor of Haifa. The municipality maintains the official website www.haifa.muni.il for citizen services. Haifa was founded in 1761 by Dahir al-Umar as a port city. The Bahai Gardens are located here. Padding paragraph to clear minimum content length checks. Padding paragraph to clear minimum content length checks."
+      }
+    ]
+  },
+  "claude": {
+    "batch_extract_fields": [
+      {
+        "for_entity": "Tel Aviv",
+        "extractions": [
+          {
+            "field_id": "mayor",
+            "value": "Ron Huldai",
+            "quote_original": "Ron Huldai has served as the mayor of Tel Aviv since 1998",
+            "confidence": 0.97
+          },
+          {
+            "field_id": "website",
+            "value": "www.tel-aviv.gov.il",
+            "quote_original": "official website www.tel-aviv.gov.il",
+            "confidence": 0.95
+          }
+        ]
+      },
+      {
+        "for_entity": "Haifa",
+        "extractions": [
+          {
+            "field_id": "mayor",
+            "value": "Yona Yahav",
+            "quote_original": "Yona Yahav serves as the mayor of Haifa",
+            "confidence": 0.95
+          },
+          {
+            "field_id": "website",
+            "value": "www.haifa.muni.il",
+            "quote_original": "official website www.haifa.muni.il",
+            "confidence": 0.95
+          }
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,2048 @@
+{
+  "components": {
+    "schemas": {
+      "BudgetUpdateRequest": {
+        "description": "Either set the balance to an absolute number or add to it.",
+        "properties": {
+          "add": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Add"
+          },
+          "set_to": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Set To"
+          }
+        },
+        "title": "BudgetUpdateRequest",
+        "type": "object"
+      },
+      "ClarificationQuestion": {
+        "properties": {
+          "example": {
+            "title": "Example",
+            "type": "string"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "question_en": {
+            "title": "Question En",
+            "type": "string"
+          },
+          "question_he": {
+            "title": "Question He",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field",
+          "question_he",
+          "question_en",
+          "example"
+        ],
+        "title": "ClarificationQuestion",
+        "type": "object"
+      },
+      "ClarificationRequest": {
+        "description": "Returned by the compiler when the prompt is not yet executable.",
+        "properties": {
+          "is_executable": {
+            "const": false,
+            "default": false,
+            "title": "Is Executable",
+            "type": "boolean"
+          },
+          "prompt_template": {
+            "title": "Prompt Template",
+            "type": "string"
+          },
+          "questions": {
+            "items": {
+              "$ref": "#/components/schemas/ClarificationQuestion"
+            },
+            "title": "Questions",
+            "type": "array"
+          },
+          "reason": {
+            "title": "Reason",
+            "type": "string"
+          }
+        },
+        "required": [
+          "reason",
+          "questions",
+          "prompt_template"
+        ],
+        "title": "ClarificationRequest",
+        "type": "object"
+      },
+      "ColumnPlan": {
+        "properties": {
+          "depends_on": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Depends On"
+          },
+          "directory_probe_query_he": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Directory Probe Query He"
+          },
+          "extraction_strategy": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ExtractionStrategy"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "label_en": {
+            "title": "Label En",
+            "type": "string"
+          },
+          "label_he": {
+            "title": "Label He",
+            "type": "string"
+          },
+          "min_corroborations": {
+            "default": 1,
+            "title": "Min Corroborations",
+            "type": "integer"
+          },
+          "preferred_source_domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Preferred Source Domains",
+            "type": "array"
+          },
+          "search_queries_en": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Search Queries En",
+            "type": "array"
+          },
+          "search_queries_he": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Search Queries He",
+            "type": "array"
+          },
+          "temporal_anchor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temporal Anchor"
+          },
+          "type": {
+            "enum": [
+              "person_name",
+              "url",
+              "date",
+              "free_text",
+              "organization",
+              "number"
+            ],
+            "title": "Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "label_he",
+          "label_en",
+          "type"
+        ],
+        "title": "ColumnPlan",
+        "type": "object"
+      },
+      "CompileRequest": {
+        "properties": {
+          "entity_type": {
+            "default": "",
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "CompileRequest",
+        "type": "object"
+      },
+      "CompileResponse": {
+        "properties": {
+          "clarification": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ClarificationRequest"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "kind": {
+            "enum": [
+              "clarification",
+              "plan"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "plan": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResearchPlan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "kind"
+        ],
+        "title": "CompileResponse",
+        "type": "object"
+      },
+      "CreateUserRequest": {
+        "properties": {
+          "credit_balance": {
+            "default": 0.0,
+            "title": "Credit Balance",
+            "type": "number"
+          },
+          "password": {
+            "maxLength": 128,
+            "minLength": 4,
+            "title": "Password",
+            "type": "string"
+          },
+          "role": {
+            "default": "user",
+            "enum": [
+              "user",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "maxLength": 64,
+            "minLength": 3,
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "CreateUserRequest",
+        "type": "object"
+      },
+      "DiscoverPlanRequest": {
+        "properties": {
+          "entity_type": {
+            "default": "",
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          }
+        },
+        "required": [
+          "question"
+        ],
+        "title": "DiscoverPlanRequest",
+        "type": "object"
+      },
+      "DiscoverRunRequest": {
+        "properties": {
+          "discovery": {
+            "$ref": "#/components/schemas/EntityDiscoveryPlan"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          },
+          "search_engine": {
+            "default": "serpapi",
+            "enum": [
+              "wikipedia",
+              "serpapi",
+              "duckduckgo",
+              "mock"
+            ],
+            "title": "Search Engine",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan",
+          "discovery"
+        ],
+        "title": "DiscoverRunRequest",
+        "type": "object"
+      },
+      "DiscoveredEntity": {
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "rank": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rank"
+          }
+        },
+        "required": [
+          "name"
+        ],
+        "title": "DiscoveredEntity",
+        "type": "object"
+      },
+      "EntityDiscoveryAuditIssue": {
+        "properties": {
+          "explanation_en": {
+            "title": "Explanation En",
+            "type": "string"
+          },
+          "explanation_he": {
+            "title": "Explanation He",
+            "type": "string"
+          },
+          "issue_kind": {
+            "enum": [
+              "unbounded_count",
+              "ambiguous_ranking",
+              "missing_anchor",
+              "subjective_criterion",
+              "no_canonical_source"
+            ],
+            "title": "Issue Kind",
+            "type": "string"
+          },
+          "suggested_fix_en": {
+            "title": "Suggested Fix En",
+            "type": "string"
+          },
+          "suggested_fix_he": {
+            "title": "Suggested Fix He",
+            "type": "string"
+          }
+        },
+        "required": [
+          "issue_kind",
+          "explanation_he",
+          "explanation_en",
+          "suggested_fix_he",
+          "suggested_fix_en"
+        ],
+        "title": "EntityDiscoveryAuditIssue",
+        "type": "object"
+      },
+      "EntityDiscoveryPlan": {
+        "description": "How to find the entities. Generated by the compiler.",
+        "properties": {
+          "audit_issues": {
+            "items": {
+              "$ref": "#/components/schemas/EntityDiscoveryAuditIssue"
+            },
+            "title": "Audit Issues",
+            "type": "array"
+          },
+          "expected_count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected Count"
+          },
+          "extraction_hint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extraction Hint"
+          },
+          "query_en": {
+            "title": "Query En",
+            "type": "string"
+          },
+          "query_he": {
+            "title": "Query He",
+            "type": "string"
+          }
+        },
+        "required": [
+          "query_he",
+          "query_en"
+        ],
+        "title": "EntityDiscoveryPlan",
+        "type": "object"
+      },
+      "EntityDiscoveryResult": {
+        "properties": {
+          "entities": {
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredEntity"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "harvested": {
+            "items": {
+              "$ref": "#/components/schemas/HarvestedValue"
+            },
+            "title": "Harvested",
+            "type": "array"
+          },
+          "source_domain": {
+            "title": "Source Domain",
+            "type": "string"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entities",
+          "source_url",
+          "source_domain"
+        ],
+        "title": "EntityDiscoveryResult",
+        "type": "object"
+      },
+      "ExcelExportOut": {
+        "properties": {
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "filename": {
+            "title": "Filename",
+            "type": "string"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "filename",
+          "created_at"
+        ],
+        "title": "ExcelExportOut",
+        "type": "object"
+      },
+      "ExtractionStrategy": {
+        "description": "Field-specific hints used by the windowing algorithm to prioritise the\nmost relevant chunks of a long page. Generated by the LLM at Phase B2.\n\nAll fields are optional and best-effort: bad hints fall back to pure\nkeyword-density scoring (see _select_text_with_strategy safety net).",
+        "properties": {
+          "value_anchors_en": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Value Anchors En",
+            "type": "array"
+          },
+          "value_anchors_he": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Value Anchors He",
+            "type": "array"
+          },
+          "value_regex": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Regex"
+          }
+        },
+        "title": "ExtractionStrategy",
+        "type": "object"
+      },
+      "FieldAuditIssue": {
+        "properties": {
+          "explanation_en": {
+            "title": "Explanation En",
+            "type": "string"
+          },
+          "explanation_he": {
+            "title": "Explanation He",
+            "type": "string"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "issue_kind": {
+            "enum": [
+              "unbounded",
+              "subjective",
+              "missing_anchor",
+              "ambiguous_format",
+              "no_canonical_source"
+            ],
+            "title": "Issue Kind",
+            "type": "string"
+          },
+          "suggested_fix_en": {
+            "title": "Suggested Fix En",
+            "type": "string"
+          },
+          "suggested_fix_he": {
+            "title": "Suggested Fix He",
+            "type": "string"
+          }
+        },
+        "required": [
+          "field_id",
+          "issue_kind",
+          "explanation_he",
+          "explanation_en",
+          "suggested_fix_he",
+          "suggested_fix_en"
+        ],
+        "title": "FieldAuditIssue",
+        "type": "object"
+      },
+      "FieldAuditReport": {
+        "properties": {
+          "all_clear": {
+            "title": "All Clear",
+            "type": "boolean"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/FieldAuditIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          }
+        },
+        "required": [
+          "all_clear"
+        ],
+        "title": "FieldAuditReport",
+        "type": "object"
+      },
+      "HTTPValidationError": {
+        "properties": {
+          "detail": {
+            "items": {
+              "$ref": "#/components/schemas/ValidationError"
+            },
+            "title": "Detail",
+            "type": "array"
+          }
+        },
+        "title": "HTTPValidationError",
+        "type": "object"
+      },
+      "HarvestedValue": {
+        "description": "Field value already extracted from the discovery page, by entity.",
+        "properties": {
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "quote": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Quote"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "entity_name",
+          "field_id",
+          "value",
+          "quote"
+        ],
+        "title": "HarvestedValue",
+        "type": "object"
+      },
+      "LoginRequest": {
+        "properties": {
+          "password": {
+            "title": "Password",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "username",
+          "password"
+        ],
+        "title": "LoginRequest",
+        "type": "object"
+      },
+      "ManagedUserOut": {
+        "properties": {
+          "admin_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credit_balance": {
+            "title": "Credit Balance",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "session_count": {
+            "default": 0,
+            "title": "Session Count",
+            "type": "integer"
+          },
+          "total_cost_used": {
+            "default": 0.0,
+            "title": "Total Cost Used",
+            "type": "number"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role",
+          "credit_balance",
+          "is_active",
+          "created_at"
+        ],
+        "title": "ManagedUserOut",
+        "type": "object"
+      },
+      "MockResponse": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/MockRow"
+            },
+            "title": "Rows",
+            "type": "array"
+          }
+        },
+        "required": [
+          "rows"
+        ],
+        "title": "MockResponse",
+        "type": "object"
+      },
+      "MockRow": {
+        "properties": {
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Values",
+            "type": "object"
+          }
+        },
+        "required": [
+          "entity_name",
+          "values"
+        ],
+        "title": "MockRow",
+        "type": "object"
+      },
+      "PlanOnlyRequest": {
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "PlanOnlyRequest",
+        "type": "object"
+      },
+      "ResearchPlan": {
+        "properties": {
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/ColumnPlan"
+            },
+            "title": "Columns",
+            "type": "array"
+          },
+          "entity_type": {
+            "title": "Entity Type",
+            "type": "string"
+          },
+          "research_question_original": {
+            "title": "Research Question Original",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity_type",
+          "research_question_original",
+          "columns"
+        ],
+        "title": "ResearchPlan",
+        "type": "object"
+      },
+      "RunRequest": {
+        "properties": {
+          "entities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          },
+          "search_engine": {
+            "default": "serpapi",
+            "enum": [
+              "wikipedia",
+              "serpapi",
+              "duckduckgo",
+              "mock"
+            ],
+            "title": "Search Engine",
+            "type": "string"
+          },
+          "seeded_probe": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seeded Probe"
+          }
+        },
+        "required": [
+          "plan",
+          "entities"
+        ],
+        "title": "RunRequest",
+        "type": "object"
+      },
+      "SessionOut": {
+        "properties": {
+          "completed_at": {
+            "anyOf": [
+              {
+                "format": "date-time",
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Completed At"
+          },
+          "cost_used": {
+            "title": "Cost Used",
+            "type": "number"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "entity_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entity Type"
+          },
+          "exports": {
+            "default": [],
+            "items": {
+              "$ref": "#/components/schemas/ExcelExportOut"
+            },
+            "title": "Exports",
+            "type": "array"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "question": {
+            "title": "Question",
+            "type": "string"
+          },
+          "status": {
+            "title": "Status",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "user_id",
+          "question",
+          "status",
+          "cost_used",
+          "created_at"
+        ],
+        "title": "SessionOut",
+        "type": "object"
+      },
+      "TokenResponse": {
+        "properties": {
+          "access_token": {
+            "title": "Access Token",
+            "type": "string"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "token_type": {
+            "const": "bearer",
+            "default": "bearer",
+            "title": "Token Type",
+            "type": "string"
+          },
+          "user_id": {
+            "title": "User Id",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "access_token",
+          "user_id",
+          "username",
+          "role"
+        ],
+        "title": "TokenResponse",
+        "type": "object"
+      },
+      "UserOut": {
+        "properties": {
+          "admin_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Admin Id"
+          },
+          "created_at": {
+            "format": "date-time",
+            "title": "Created At",
+            "type": "string"
+          },
+          "credit_balance": {
+            "title": "Credit Balance",
+            "type": "number"
+          },
+          "id": {
+            "title": "Id",
+            "type": "string"
+          },
+          "is_active": {
+            "title": "Is Active",
+            "type": "boolean"
+          },
+          "role": {
+            "enum": [
+              "user",
+              "admin"
+            ],
+            "title": "Role",
+            "type": "string"
+          },
+          "username": {
+            "title": "Username",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "username",
+          "role",
+          "credit_balance",
+          "is_active",
+          "created_at"
+        ],
+        "title": "UserOut",
+        "type": "object"
+      },
+      "ValidationError": {
+        "properties": {
+          "ctx": {
+            "title": "Context",
+            "type": "object"
+          },
+          "input": {
+            "title": "Input"
+          },
+          "loc": {
+            "items": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            },
+            "title": "Location",
+            "type": "array"
+          },
+          "msg": {
+            "title": "Message",
+            "type": "string"
+          },
+          "type": {
+            "title": "Error Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "loc",
+          "msg",
+          "type"
+        ],
+        "title": "ValidationError",
+        "type": "object"
+      }
+    }
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/admin/users": {
+      "get": {
+        "operationId": "list_managed_users_api_admin_users_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ManagedUserOut"
+                  },
+                  "title": "Response List Managed Users Api Admin Users Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Managed Users",
+        "tags": [
+          "admin"
+        ]
+      },
+      "post": {
+        "operationId": "create_managed_user_api_admin_users_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateUserRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Create Managed User",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/users/{user_id}": {
+      "delete": {
+        "operationId": "disable_user_api_admin_users__user_id__delete",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Disable User",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/users/{user_id}/budget": {
+      "put": {
+        "operationId": "update_user_budget_api_admin_users__user_id__budget_put",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BudgetUpdateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Update User Budget",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/admin/users/{user_id}/sessions": {
+      "get": {
+        "operationId": "list_user_sessions_api_admin_users__user_id__sessions_get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "user_id",
+            "required": true,
+            "schema": {
+              "title": "User Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SessionOut"
+                  },
+                  "title": "Response List User Sessions Api Admin Users  User Id  Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List User Sessions",
+        "tags": [
+          "admin"
+        ]
+      }
+    },
+    "/api/audit": {
+      "post": {
+        "description": "Phase C — per-field clarity audit.",
+        "operationId": "api_audit_api_audit_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanOnlyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FieldAuditReport"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Audit"
+      }
+    },
+    "/api/auth/login": {
+      "post": {
+        "operationId": "login_api_auth_login_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LoginRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TokenResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Login",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/auth/me": {
+      "get": {
+        "operationId": "me_api_auth_me_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/UserOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Me",
+        "tags": [
+          "auth"
+        ]
+      }
+    },
+    "/api/compile-schema": {
+      "post": {
+        "description": "Phase A preflight + Phase B1 bare schema.",
+        "operationId": "api_compile_schema_api_compile_schema_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompileRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CompileResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Compile Schema"
+      }
+    },
+    "/api/discover-entities/plan": {
+      "post": {
+        "description": "Phase 0D — generate the discovery query and audit the question.",
+        "operationId": "api_discover_plan_api_discover_entities_plan_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntityDiscoveryPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Discover Plan"
+      }
+    },
+    "/api/discover-entities/run": {
+      "post": {
+        "description": "Execute discovery search + LLM extraction. Returns None on failure.",
+        "operationId": "api_discover_run_api_discover_entities_run_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DiscoverRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/components/schemas/EntityDiscoveryResult"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "title": "Response Api Discover Run Api Discover Entities Run Post"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Discover Run"
+      }
+    },
+    "/api/enrich": {
+      "post": {
+        "description": "Phase B2 — add search queries to an approved schema.",
+        "operationId": "api_enrich_api_enrich_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanOnlyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResearchPlan"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Enrich"
+      }
+    },
+    "/api/health": {
+      "get": {
+        "operationId": "health_api_health_get",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Health Api Health Get",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          }
+        },
+        "summary": "Health"
+      }
+    },
+    "/api/mock-preview": {
+      "post": {
+        "description": "Phase D — 2-3 fake rows so the user can sanity-check shape.",
+        "operationId": "api_mock_preview_api_mock_preview_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlanOnlyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MockResponse"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Mock Preview"
+      }
+    },
+    "/api/run": {
+      "post": {
+        "description": "Stage 1+ — run the research pipeline. Streams Server-Sent Events.\n\nSide effects (no run-blocking yet):\n  * Creates a ResearchSession row at start.\n  * Tracks Anthropic token usage via TrackedAnthropic; the dollar estimate\n    is written to ResearchSession.cost_used at completion.\n  * Writes an .xlsx of the results and records an ExcelExport row.",
+        "operationId": "api_run_api_run_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Run"
+      }
+    },
+    "/api/user/exports/{export_id}": {
+      "get": {
+        "operationId": "download_export_api_user_exports__export_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "export_id",
+            "required": true,
+            "schema": {
+              "title": "Export Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Download Export",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/user/sessions": {
+      "get": {
+        "operationId": "list_own_sessions_api_user_sessions_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SessionOut"
+                  },
+                  "title": "Response List Own Sessions Api User Sessions Get",
+                  "type": "array"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "List Own Sessions",
+        "tags": [
+          "user"
+        ]
+      }
+    },
+    "/api/user/sessions/{session_id}": {
+      "get": {
+        "operationId": "get_own_session_api_user_sessions__session_id__get",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Get Own Session",
+        "tags": [
+          "user"
+        ]
+      }
+    }
+  }
+}
