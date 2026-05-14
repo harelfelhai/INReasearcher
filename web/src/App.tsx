@@ -2,19 +2,39 @@ import { useState } from "react";
 import type {
   ClarificationRequest,
   FieldAuditReport,
+  HarvestedValue,
   MockRow,
   ResearchPlan,
   SearchEngine,
 } from "./types";
+import type { SeededProbe } from "./api";
 import Setup from "./components/Setup";
 import SchemaReview from "./components/SchemaReview";
 import Results from "./components/Results";
 import Login from "./components/Login";
 import UserDashboard from "./components/UserDashboard";
 import AdminDashboard from "./components/AdminDashboard";
+import EntityReview from "./components/EntityReview";
 import { AuthProvider, useAuth } from "./auth";
 
-type View = "dashboard" | "setup" | "review" | "results" | "admin";
+type View = "dashboard" | "setup" | "review" | "discover" | "results" | "admin";
+
+function harvestToSeededProbe(
+  harvested: HarvestedValue[],
+  sourceUrl: string,
+): SeededProbe {
+  const out: SeededProbe = {};
+  for (const h of harvested) {
+    if (!h.value) continue;
+    if (!out[h.field_id]) out[h.field_id] = {};
+    out[h.field_id][h.entity_name] = {
+      value: h.value,
+      quote: h.quote ?? "",
+      source_url: sourceUrl,
+    };
+  }
+  return out;
+}
 
 function AppShell() {
   const { user, loading, logout } = useAuth();
@@ -30,11 +50,15 @@ function AppShell() {
   const [audit, setAudit] = useState<FieldAuditReport | null>(null);
   const [mockRows, setMockRows] = useState<MockRow[]>([]);
   const [enrichedPlan, setEnrichedPlan] = useState<ResearchPlan | null>(null);
+  const [autoDiscover, setAutoDiscover] = useState(false);
+  const [discoveredEntities, setDiscoveredEntities] = useState<string[] | null>(null);
+  const [seededProbe, setSeededProbe] = useState<SeededProbe | undefined>(undefined);
 
-  const entities = entitiesText
+  const manualEntities = entitiesText
     .split("\n")
     .map((s) => s.trim())
     .filter(Boolean);
+  const entities = autoDiscover ? (discoveredEntities ?? []) : manualEntities;
 
   if (loading) {
     return (
@@ -57,6 +81,9 @@ function AppShell() {
     setMockRows([]);
     setEnrichedPlan(null);
     setClarification(null);
+    setAutoDiscover(false);
+    setDiscoveredEntities(null);
+    setSeededProbe(undefined);
     setView("setup");
   }
 
@@ -121,6 +148,8 @@ function AppShell() {
             setEntitiesText={setEntitiesText}
             searchEngine={searchEngine}
             setSearchEngine={setSearchEngine}
+            autoDiscover={autoDiscover}
+            setAutoDiscover={setAutoDiscover}
             clarification={clarification}
             onCompiled={(plan, audit, mockRows, clarification) => {
               setClarification(clarification);
@@ -140,6 +169,21 @@ function AppShell() {
             onBack={() => setView("setup")}
             onApproved={(enriched) => {
               setEnrichedPlan(enriched);
+              setView(autoDiscover ? "discover" : "results");
+            }}
+          />
+        )}
+
+        {view === "discover" && enrichedPlan && (
+          <EntityReview
+            plan={enrichedPlan}
+            question={question}
+            entityType={entityType}
+            searchEngine={searchEngine}
+            onBack={() => setView("review")}
+            onApproved={(names, harvested, sourceUrl) => {
+              setDiscoveredEntities(names);
+              setSeededProbe(harvestToSeededProbe(harvested, sourceUrl));
               setView("results");
             }}
           />
@@ -150,6 +194,7 @@ function AppShell() {
             plan={enrichedPlan}
             entities={entities}
             searchEngine={searchEngine}
+            seededProbe={seededProbe}
             onRestart={() => setView("dashboard")}
           />
         )}

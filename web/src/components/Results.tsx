@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from "react";
-import { downloadExport, runResearch, type RunDonePayload } from "../api";
+import { downloadExport, runResearch, type RunDonePayload, type SeededProbe } from "../api";
 import type { EntityResult, ResearchPlan, SearchEngine } from "../types";
 
 interface Props {
   plan: ResearchPlan;
   entities: string[];
   searchEngine: SearchEngine;
+  seededProbe?: SeededProbe;
   onRestart: () => void;
 }
 
-export default function Results({ plan, entities, searchEngine, onRestart }: Props) {
+export default function Results({ plan, entities, searchEngine, seededProbe, onRestart }: Props) {
   const [results, setResults] = useState<EntityResult[]>([]);
   const [current, setCurrent] = useState<string | null>(null);
   const [status, setStatus] = useState<"running" | "done" | "error">("running");
@@ -23,7 +24,7 @@ export default function Results({ plan, entities, searchEngine, onRestart }: Pro
       onEntityDone: (r) => setResults((prev) => [...prev, r]),
       onDone: (info) => { setStatus("done"); setCurrent(null); setDoneInfo(info); },
       onError: (m) => { setStatus("error"); setErrorMsg(m); },
-    });
+    }, seededProbe);
     return () => ctrlRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);

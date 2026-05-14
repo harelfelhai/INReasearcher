@@ -26,6 +26,8 @@ from .models import (
     ClarificationRequest,
     ExecutableResearchPlan,
     ExtractionStrategy,
+    EntityDiscoveryAuditIssue,
+    EntityDiscoveryPlan,
     FieldAuditIssue,
     FieldAuditReport,
     MockRow,
@@ -598,6 +600,112 @@ def enrich_with_queries(
         entity_type=plan.entity_type,
         research_question_original=plan.research_question_original,
         columns=enriched_columns,
+    )
+
+
+# ── Phase 0D — Entity Discovery planner + audit ──────────────────────────────
+#
+# Used only when the user opts in to auto-discovery. Generates the search query
+# that will fetch the canonical list page AND audits the question for issues
+# that would make discovery unreliable (unbounded count, ambiguous ranking,
+# missing time anchor, etc.). If any audit issue is raised the caller MUST
+# surface it before running the actual search — wrong entities are far more
+# costly than wrong field values.
+
+_DISCOVERY_PLAN_TOOL = {
+    "name": "plan_entity_discovery",
+    "description": (
+        "Given a research question that asks for an open set of entities "
+        "(\"the 10 largest cities in Israel\"), produce the search query that "
+        "would surface the canonical ranked list, and audit the question for "
+        "issues that would make discovery unreliable."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "query_he":         {"type": "string"},
+            "query_en":         {"type": "string"},
+            "expected_count":   {"type": ["integer", "null"]},
+            "extraction_hint":  {"type": "string"},
+            "audit_issues": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "issue_kind": {
+                            "type": "string",
+                            "enum": [
+                                "unbounded_count",
+                                "ambiguous_ranking",
+                                "missing_anchor",
+                                "subjective_criterion",
+                                "no_canonical_source",
+                            ],
+                        },
+                        "explanation_he":   {"type": "string"},
+                        "explanation_en":   {"type": "string"},
+                        "suggested_fix_he": {"type": "string"},
+                        "suggested_fix_en": {"type": "string"},
+                    },
+                    "required": [
+                        "issue_kind", "explanation_he", "explanation_en",
+                        "suggested_fix_he", "suggested_fix_en",
+                    ],
+                },
+            },
+        },
+        "required": ["query_he", "query_en", "extraction_hint", "audit_issues"],
+    },
+}
+
+_DISCOVERY_PLAN_SYSTEM = """\
+You are planning an entity-discovery step for an automated research agent.
+
+The user has given a question whose entity list is OPEN (must be discovered).
+Your job has two parts:
+
+1. AUDIT the question. Raise an issue when it is not safely answerable:
+   - unbounded_count       — no explicit number ("the largest cities")
+   - ambiguous_ranking     — "largest"/"best" by what metric?
+   - missing_anchor        — rankings drift; needs a year or "as of YYYY"
+   - subjective_criterion  — "best", "most popular" with no objective source
+   - no_canonical_source   — no single authoritative ranked list exists
+
+   If clean, return audit_issues = [].
+
+2. Build the SEARCH QUERY (Hebrew + English) that will surface the canonical
+   ranked list page (Wikipedia, government statistics bureau, etc.). Use
+   the year anchor explicitly if present. Set expected_count when the
+   question states one.
+
+   The extraction_hint is a short natural-language description of what to
+   extract from the resulting page (e.g. "ordered list of city names by
+   2023 population"). The downstream extractor will see this.
+"""
+
+
+def plan_entity_discovery(
+    research_question: str,
+    entity_type: str,
+    client: anthropic.Anthropic,
+) -> EntityDiscoveryPlan:
+    """Phase 0D: produce a search query + audit for the entity question."""
+    data = _call_tool(
+        client,
+        _DISCOVERY_PLAN_SYSTEM,
+        _DISCOVERY_PLAN_TOOL,
+        f"Research question: {research_question}\n"
+        f"Entity type: {entity_type or 'infer from question'}\n\n"
+        "Plan the entity-discovery search and audit the question.",
+        max_tokens=1024,
+    )
+    issues = [EntityDiscoveryAuditIssue(**i) for i in data.get("audit_issues", [])]
+    return EntityDiscoveryPlan(
+        query_he=data["query_he"],
+        query_en=data["query_en"],
+        expected_count=data.get("expected_count"),
+        extraction_hint=data.get("extraction_hint"),
+        audit_issues=issues,
     )
 
 

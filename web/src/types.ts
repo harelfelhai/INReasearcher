@@ -69,6 +69,51 @@ export interface MockRow {
   values: Record<string, string>;
 }
 
+// ── Entity discovery ─────────────────────────────────────────────────────────
+
+export type DiscoveryIssueKind =
+  | "unbounded_count"
+  | "ambiguous_ranking"
+  | "missing_anchor"
+  | "subjective_criterion"
+  | "no_canonical_source";
+
+export interface EntityDiscoveryAuditIssue {
+  issue_kind: DiscoveryIssueKind;
+  explanation_he: string;
+  explanation_en: string;
+  suggested_fix_he: string;
+  suggested_fix_en: string;
+}
+
+export interface EntityDiscoveryPlan {
+  query_he: string;
+  query_en: string;
+  expected_count?: number | null;
+  extraction_hint?: string | null;
+  audit_issues: EntityDiscoveryAuditIssue[];
+}
+
+export interface DiscoveredEntity {
+  name: string;
+  rank?: number | null;
+  quote?: string | null;
+}
+
+export interface HarvestedValue {
+  entity_name: string;
+  field_id: string;
+  value: string | null;
+  quote: string | null;
+}
+
+export interface EntityDiscoveryResult {
+  entities: DiscoveredEntity[];
+  harvested: HarvestedValue[];
+  source_url: string;
+  source_domain: string;
+}
+
 export interface VerifiedCell {
   field_id: string;
   label_he: string;

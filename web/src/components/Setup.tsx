@@ -17,6 +17,8 @@ interface Props {
   setEntitiesText: (s: string) => void;
   searchEngine: SearchEngine;
   setSearchEngine: (e: SearchEngine) => void;
+  autoDiscover: boolean;
+  setAutoDiscover: (b: boolean) => void;
   clarification: ClarificationRequest | null;
   onCompiled: (
     plan: ResearchPlan | null,
@@ -132,15 +134,41 @@ export default function Setup(props: Props) {
         </div>
 
         <div>
-          <label className="block text-sm font-medium mb-1">ישויות (אחת בכל שורה)</label>
-          <textarea
-            className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
-            rows={6}
-            placeholder={"תל אביב\nחיפה\nירושלים"}
-            value={props.entitiesText}
-            onChange={(e) => props.setEntitiesText(e.target.value)}
-            dir="auto"
-          />
+          <div className="flex items-center justify-between mb-1">
+            <label className="block text-sm font-medium">
+              ישויות {props.autoDiscover ? "(יתגלו אוטומטית)" : "(אחת בכל שורה)"}
+            </label>
+            <label className="text-xs text-slate-600 flex items-center gap-1.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={props.autoDiscover}
+                onChange={(e) => props.setAutoDiscover(e.target.checked)}
+              />
+              גלה ישויות אוטומטית מהשאלה
+            </label>
+          </div>
+          {props.autoDiscover ? (
+            <div className="border border-amber-200 bg-amber-50 rounded-lg p-3 text-sm text-amber-900 space-y-1">
+              <div className="font-medium">⚠ מצב גילוי אוטומטי</div>
+              <p>
+                המערכת תנסה לחלץ את רשימת הישויות מהשאלה (למשל "10 הערים הגדולות בישראל").
+                לפני הרצת המחקר המלא תוצג רשימה לאישור.
+              </p>
+              <p className="text-amber-800">
+                <strong>גילוי אוטומטי פחות מדויק ויקר יותר.</strong> אם הרשימה ידועה לך —
+                עדיף לספק אותה ידנית.
+              </p>
+            </div>
+          ) : (
+            <textarea
+              className="w-full border border-slate-300 rounded-lg p-3 text-base bg-white"
+              rows={6}
+              placeholder={"תל אביב\nחיפה\nירושלים"}
+              value={props.entitiesText}
+              onChange={(e) => props.setEntitiesText(e.target.value)}
+              dir="auto"
+            />
+          )}
         </div>
 
         {props.clarification && (

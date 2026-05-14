@@ -44,11 +44,13 @@ from research_agent.compiler import (
     audit_schema,
     generate_mock_rows,
     enrich_with_queries,
+    plan_entity_discovery,
 )
 from research_agent.extractor import (
     search_and_extract_batched,
     probe_field_list,
     verify_probe_extraction,
+    discover_entities,
     MockTavilyClient,
     DuckDuckGoClient,
     WikipediaSearchClient,
@@ -59,6 +61,9 @@ from research_agent.models import (
     ClarificationRequest,
     ResearchPlan,
     EntityResult,
+    EntityDiscoveryPlan,
+    EntityDiscoveryResult,
+    ExtractionResult,
     FieldAuditReport,
     MockRow,
 )
@@ -131,6 +136,14 @@ async def all_exceptions_handler(request: Request, exc: Exception):
 
 # ── Shared Claude client ─────────────────────────────────────────────────────
 
+def _domain_safe(url: str) -> str:
+    try:
+        from urllib.parse import urlparse
+        return urlparse(url).netloc or ""
+    except Exception:
+        return ""
+
+
 def _claude() -> anthropic.Anthropic:
     key = os.getenv("ANTHROPIC_API_KEY", "")
     if not key:
@@ -181,6 +194,20 @@ class RunRequest(BaseModel):
     plan: ResearchPlan
     entities: list[str]
     search_engine: SearchEngine = "serpapi"
+    # Optional pre-extracted (field_id, entity_name) → value+quote+source,
+    # produced by /api/discover-entities/run. Seeds Lane 1 of the run.
+    seeded_probe: Optional[dict] = None
+
+
+class DiscoverPlanRequest(BaseModel):
+    question: str
+    entity_type: str = ""
+
+
+class DiscoverRunRequest(BaseModel):
+    plan: ResearchPlan
+    discovery: EntityDiscoveryPlan
+    search_engine: SearchEngine = "serpapi"
 
 
 # ── Endpoints ────────────────────────────────────────────────────────────────
@@ -229,6 +256,42 @@ def api_enrich(
     return enrich_with_queries(req.plan, _claude())
 
 
+# ── Entity discovery ─────────────────────────────────────────────────────────
+#
+# Two-step flow, mirroring Stage-0 / Stage-1:
+#   1. POST /api/discover-entities/plan  → returns query + audit issues.
+#      The UI must surface any audit issues and let the user fix the question
+#      before proceeding to step 2.
+#   2. POST /api/discover-entities/run   → executes the discovery search,
+#      returns the entity list (with source quotes) and any field values
+#      already harvested from the same page. The UI then shows the
+#      EntityReview screen for user approval before /api/run is called.
+
+@app.post("/api/discover-entities/plan", response_model=EntityDiscoveryPlan)
+def api_discover_plan(
+    req: DiscoverPlanRequest,
+    _user: User = Depends(get_current_user),
+) -> EntityDiscoveryPlan:
+    """Phase 0D — generate the discovery query and audit the question."""
+    return plan_entity_discovery(req.question, req.entity_type, _claude())
+
+
+@app.post("/api/discover-entities/run", response_model=Optional[EntityDiscoveryResult])
+def api_discover_run(
+    req: DiscoverRunRequest,
+    _user: User = Depends(get_current_user),
+):
+    """Execute discovery search + LLM extraction. Returns None on failure."""
+    if req.discovery.audit_issues:
+        raise HTTPException(
+            400,
+            "Discovery question has unresolved audit issues — resolve them first.",
+        )
+    claude = _claude()
+    search = _search_client(req.search_engine)
+    return discover_entities(req.discovery, req.plan.columns, search, claude)
+
+
 @app.post("/api/run")
 def api_run(
     req: RunRequest,
@@ -270,9 +333,49 @@ def api_run(
                 "credit_balance": user.credit_balance,
             })
 
-            # ── Phase 0: Probe each field for a directory/list page ──────────
+            # ── Phase 0a: Seed probe_results from discovery harvest ──────────
+            # Any (field, entity) values already lifted from the discovery
+            # page are injected as synthetic probe hits. Lane 1 will then
+            # treat them like normal probe hits — running ONE verification
+            # search rather than the full per-field cycle.
             probe_results: dict[str, dict] = {}
+            if req.seeded_probe:
+                entity_set = set(entities)
+                for fid, by_entity in req.seeded_probe.items():
+                    if not isinstance(by_entity, dict):
+                        continue
+                    field_obj = next((c for c in plan.columns if c.id == fid), None)
+                    if not field_obj:
+                        continue
+                    bucket: dict = {}
+                    for ename, payload in by_entity.items():
+                        if ename not in entity_set or not isinstance(payload, dict):
+                            continue
+                        if not payload.get("value"):
+                            continue
+                        src_url = payload.get("source_url") or ""
+                        bucket[ename] = ExtractionResult(
+                            field_id=fid,
+                            value=payload["value"],
+                            quote_original=payload.get("quote") or "",
+                            source_url=src_url,
+                            source_domain=_domain_safe(src_url),
+                            is_grounded=True,
+                            extractor_confidence=0.85,
+                        )
+                    if bucket:
+                        probe_results[fid] = bucket
+                        yield _sse("probe_hit", {
+                            "field_id": fid,
+                            "entities_found": len(bucket),
+                            "entities_total": len(entities),
+                            "source": "discovery",
+                        })
+
+            # ── Phase 0b: Standard probe per field ───────────────────────────
             for field in plan.columns:
+                if field.id in probe_results:
+                    continue  # already seeded
                 if field.directory_probe_query_he:
                     result = probe_field_list(field, entities, search, claude)
                     if result:

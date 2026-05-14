@@ -1,6 +1,8 @@
 import type {
   AuthUser,
   ClarificationRequest,
+  EntityDiscoveryPlan,
+  EntityDiscoveryResult,
   EntityResult,
   FieldAuditReport,
   LoginResponse,
@@ -198,6 +200,23 @@ export async function enrichPlan(plan: ResearchPlan): Promise<ResearchPlan> {
   return postJson("/api/enrich", { plan });
 }
 
+// ── Entity discovery (optional, opt-in) ─────────────────────────────────────
+
+export async function planDiscovery(
+  question: string,
+  entity_type = "",
+): Promise<EntityDiscoveryPlan> {
+  return postJson("/api/discover-entities/plan", { question, entity_type });
+}
+
+export async function runDiscovery(
+  plan: ResearchPlan,
+  discovery: EntityDiscoveryPlan,
+  search_engine: SearchEngine,
+): Promise<EntityDiscoveryResult | null> {
+  return postJson("/api/discover-entities/run", { plan, discovery, search_engine });
+}
+
 export interface RunDonePayload {
   n: number;
   session_id: string;
@@ -219,11 +238,17 @@ export interface RunEvents {
  * Streams Server-Sent Events from /api/run. Returns an AbortController
  * the caller can use to cancel.
  */
+export type SeededProbe = Record<
+  string,
+  Record<string, { value: string; quote?: string; source_url?: string }>
+>;
+
 export function runResearch(
   plan: ResearchPlan,
   entities: string[],
   search_engine: SearchEngine,
   events: RunEvents,
+  seeded_probe?: SeededProbe,
 ): AbortController {
   const ctrl = new AbortController();
 
@@ -232,7 +257,7 @@ export function runResearch(
       const r = await fetch("/api/run", {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ plan, entities, search_engine }),
+        body: JSON.stringify({ plan, entities, search_engine, seeded_probe }),
         signal: ctrl.signal,
       });
       if (!r.ok || !r.body) throw new Error(await readError(r));

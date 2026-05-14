@@ -874,6 +874,206 @@ def probe_field_list(
     return None
 
 
+# ── Entity Discovery ─────────────────────────────────────────────────────────
+#
+# When the entity list itself is open ("the 10 largest cities in Israel") we
+# run ONE focused search + ONE LLM call that does double duty:
+#   1. Extracts the ordered entity list.
+#   2. Harvests any column-plan field values already visible on the same page
+#      (a city-by-population table will typically also include founding year,
+#      district, area, etc.).
+#
+# The harvested values are returned alongside the entity list and feed straight
+# into probe_results in /api/run, so verification-search + Lane 1 logic is
+# reused as-is. There is NO automatic acceptance — the orchestrator MUST gate
+# on user approval before passing the list to the entity loop.
+
+_DISCOVER_TOOL = {
+    "name": "discover_entities",
+    "description": (
+        "From a directory/ranking page, extract the ordered list of entities "
+        "that match the research criterion. Additionally, for each entity, "
+        "harvest any of the requested column-plan field values that are "
+        "explicitly stated on the same page."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "entities": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name":  {"type": "string"},
+                        "rank":  {"type": ["integer", "null"]},
+                        "quote": {"type": "string"},
+                    },
+                    "required": ["name", "quote"],
+                },
+            },
+            "harvested": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entity_name": {"type": "string"},
+                        "field_id":    {"type": "string"},
+                        "value":       {"type": ["string", "null"]},
+                        "quote":       {"type": "string"},
+                    },
+                    "required": ["entity_name", "field_id", "value", "quote"],
+                },
+            },
+        },
+        "required": ["entities", "harvested"],
+    },
+}
+
+_DISCOVER_SYSTEM = """\
+You are an entity-discovery agent reading a ranked-list page.
+
+Two outputs in one call:
+
+A. ENTITIES — produce the ordered list that matches the research criterion.
+   - Use the exact names as written on the page (canonical form).
+   - Set rank = 1-based ordinal when the list is ordered.
+   - quote MUST be a verbatim substring from the source proving the name appears.
+   - If the question specifies a count N, return up to N entities, in order.
+   - If the page does not yield a confident list, return an empty entities array.
+
+B. HARVESTED — for EACH entity returned in (A), and EACH column-plan field
+   provided in the prompt, if the value is EXPLICITLY stated on the page,
+   emit one harvested row with the exact value + verbatim quote. Otherwise
+   skip that (entity, field) — do NOT guess.
+
+All grounding rules from the standard extractor apply: every value must have
+a verbatim quote; never fabricate.
+"""
+
+
+def discover_entities(
+    discovery_plan,
+    plan_columns: list,
+    search_client,
+    claude: anthropic.Anthropic,
+):
+    """Run discovery search + LLM extraction. Returns EntityDiscoveryResult or None."""
+    from .models import (
+        DiscoveredEntity, HarvestedValue, EntityDiscoveryResult,
+    )
+
+    query = discovery_plan.query_he or discovery_plan.query_en
+    if not query:
+        return None
+
+    print(f"[discover] query={query!r}")
+    try:
+        response = search_client.search(query, max_results=3, include_raw_content=True)
+    except Exception as exc:
+        print(f"[discover error] search failed: {exc}")
+        return None
+
+    columns_summary = "\n".join(
+        f"  - id={c.id}, label_he={c.label_he!r}, label_en={c.label_en!r}, "
+        f"type={c.type}"
+        + (f", temporal_anchor={c.temporal_anchor!r}" if c.temporal_anchor else "")
+        for c in plan_columns
+    )
+    expected = (
+        f"Expected count: {discovery_plan.expected_count}\n"
+        if discovery_plan.expected_count else ""
+    )
+    hint = (
+        f"Extraction hint: {discovery_plan.extraction_hint}\n"
+        if discovery_plan.extraction_hint else ""
+    )
+
+    for hit in response.get("results", []):
+        url = hit.get("url", "")
+        content = hit.get("raw_content") or hit.get("content", "")
+        if not content or len(content) < 200:
+            continue
+
+        user_prompt = (
+            f"{expected}{hint}"
+            f"Research question criterion: {query}\n\n"
+            f"Column-plan fields to also harvest if visible:\n{columns_summary}\n\n"
+            f"Source URL: {url}\n"
+            f"Source text:\n---\n{content[:_BUDGET]}\n---\n\n"
+            "Return the ordered entity list AND any harvested field values."
+        )
+
+        max_tokens = 4096
+        try:
+            resp = claude.messages.create(
+                model="claude-sonnet-4-6",
+                max_tokens=max_tokens,
+                system=_DISCOVER_SYSTEM,
+                tools=[_DISCOVER_TOOL],
+                tool_choice={"type": "tool", "name": "discover_entities"},
+                messages=[{"role": "user", "content": user_prompt}],
+            )
+            tool_block = next(b for b in resp.content if b.type == "tool_use")
+            data = tool_block.input
+        except Exception as exc:
+            print(f"[discover error] LLM failed on {url[:70]!r}: {exc}")
+            continue
+
+        raw_entities = data.get("entities", []) or []
+        if not raw_entities:
+            print(f"[discover] {url[:70]!r}: empty list, trying next hit")
+            continue
+
+        # Ground every entity quote in the page text (substring check).
+        content_lower = content.lower()
+        entities = []
+        for i, e in enumerate(raw_entities):
+            name = (e.get("name") or "").strip()
+            if not name:
+                continue
+            quote = e.get("quote") or ""
+            grounded = quote and quote[:80].lower() in content_lower
+            entities.append(DiscoveredEntity(
+                name=name,
+                rank=e.get("rank") if e.get("rank") is not None else i + 1,
+                quote=quote if grounded else None,
+            ))
+        if not entities:
+            continue
+
+        # Filter harvest: only keep (entity, field) pairs we can ground.
+        valid_entity_names = {e.name for e in entities}
+        valid_field_ids = {c.id for c in plan_columns}
+        harvested = []
+        for h in data.get("harvested", []) or []:
+            ename = (h.get("entity_name") or "").strip()
+            fid   = (h.get("field_id") or "").strip()
+            val   = h.get("value")
+            quote = h.get("quote") or ""
+            if ename not in valid_entity_names or fid not in valid_field_ids:
+                continue
+            if val is None:
+                continue
+            if not quote or quote[:80].lower() not in content_lower:
+                continue
+            harvested.append(HarvestedValue(
+                entity_name=ename, field_id=fid, value=val, quote=quote,
+            ))
+
+        print(
+            f"[discover] HIT {url[:70]!r}: "
+            f"{len(entities)} entities, {len(harvested)} harvested cells"
+        )
+        return EntityDiscoveryResult(
+            entities=entities,
+            harvested=harvested,
+            source_url=url,
+            source_domain=_domain(url),
+        )
+
+    return None
+
+
 def _wikidata_year(qualifier_list: list) -> int | None:
     """Extract a year integer from a Wikidata time-qualifier list."""
     for q in qualifier_list:
