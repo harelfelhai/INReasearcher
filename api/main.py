@@ -372,12 +372,24 @@ def api_run(
                             "source": "discovery",
                         })
 
-            # ── Phase 0b: Standard probe per field ───────────────────────────
-            for field in plan.columns:
-                if field.id in probe_results:
-                    continue  # already seeded
-                if field.directory_probe_query_he:
-                    result = probe_field_list(field, entities, search, claude)
+            # ── Phase 0b: Standard probe per field (parallelised) ────────────
+            # All probe searches are I/O-bound; run them concurrently via
+            # asyncio.to_thread so fields don't block each other.
+            fields_to_probe = [
+                f for f in plan.columns
+                if f.id not in probe_results and f.directory_probe_query_he
+            ]
+            if fields_to_probe:
+                probe_outcomes = await asyncio.gather(
+                    *[
+                        asyncio.to_thread(probe_field_list, f, entities, search, claude)
+                        for f in fields_to_probe
+                    ],
+                    return_exceptions=True,
+                )
+                for field, result in zip(fields_to_probe, probe_outcomes):
+                    if isinstance(result, Exception):
+                        continue
                     if result:
                         probe_results[field.id] = result
                         found_n = sum(1 for r in result.values() if r.value)
@@ -386,7 +398,6 @@ def api_run(
                             "entities_found": found_n,
                             "entities_total": len(entities),
                         })
-                await asyncio.sleep(0)
 
             # ── Phase 1: Entity loop (three lanes) ───────────────────────────
             for entity in entities:

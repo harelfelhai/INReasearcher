@@ -391,7 +391,8 @@ def extract_from_source(
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=512,
-        system=_EXTRACTOR_SYSTEM,
+        system=[{"type": "text", "text": _EXTRACTOR_SYSTEM,
+                 "cache_control": {"type": "ephemeral"}}],
         tools=[_EXTRACTOR_TOOL],
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": user_prompt}]
@@ -536,11 +537,12 @@ def bulk_extract_from_source(
         f"Return exactly {len(entities)} extraction objects — one per entity."
     )
 
-    max_tokens = min(4096, 512 + 64 * len(entities))
+    max_tokens = min(2048, 512 + 64 * len(entities))
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
-        system=_BULK_EXTRACTOR_SYSTEM,
+        system=[{"type": "text", "text": _BULK_EXTRACTOR_SYSTEM,
+                 "cache_control": {"type": "ephemeral"}}],
         tools=[_BULK_EXTRACTOR_TOOL],
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": user_prompt}],
@@ -685,11 +687,12 @@ def batch_extract_fields_from_source(
         f"Return exactly {len(fields)} extraction objects — one per field_id."
     )
 
-    max_tokens = min(4096, 384 + 256 * len(fields))
+    max_tokens = min(2048, 384 + 256 * len(fields))
     response = client.messages.create(
         model="claude-sonnet-4-6",
         max_tokens=max_tokens,
-        system=_BATCH_FIELDS_SYSTEM,
+        system=[{"type": "text", "text": _BATCH_FIELDS_SYSTEM,
+                 "cache_control": {"type": "ephemeral"}}],
         tools=[_BATCH_FIELDS_TOOL],
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": user_prompt}],
@@ -1003,12 +1006,14 @@ def discover_entities(
             "Return the ordered entity list AND any harvested field values."
         )
 
-        max_tokens = 4096
+        n_exp = (discovery_plan.expected_count or 30)
+        max_tokens = min(2048, 256 + 80 * n_exp + 60 * n_exp * len(plan_columns))
         try:
             resp = claude.messages.create(
                 model="claude-sonnet-4-6",
                 max_tokens=max_tokens,
-                system=_DISCOVER_SYSTEM,
+                system=[{"type": "text", "text": _DISCOVER_SYSTEM,
+                         "cache_control": {"type": "ephemeral"}}],
                 tools=[_DISCOVER_TOOL],
                 tool_choice={"type": "tool", "name": "discover_entities"},
                 messages=[{"role": "user", "content": user_prompt}],
