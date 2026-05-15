@@ -279,9 +279,10 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
                               href={cell.primary_source.url}
                               target="_blank"
                               rel="noreferrer"
-                              className="text-blue-600 hover:underline"
+                              className="text-blue-600 hover:underline font-mono"
+                              title={cell.primary_source.url}
                             >
-                              מקור
+                              {cell.primary_source.domain ?? new URL(cell.primary_source.url).hostname}
                             </a>
                           </>
                         )}
