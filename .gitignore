@@ -8,9 +8,10 @@ output.json
 tests/_test_*.db
 tests/_test_exports/
 
-# Runtime data — local DB and per-session Excel exports
+# Runtime data — local DB, per-session Excel exports, run traces
 data/
 exports/
+logs/
 
 # Frontend build artifacts
 web/node_modules/
