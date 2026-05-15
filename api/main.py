@@ -47,6 +47,7 @@ from research_agent.compiler import (
     plan_entity_discovery,
 )
 from research_agent.memory import SuccessMemory
+from research_agent.tracer import NullTracer, RunTracer
 from research_agent.extractor import (
     search_and_extract_batched,
     probe_field_list,
@@ -121,9 +122,13 @@ def _process_entity_sync(
     search,
     claude,
     memory: SuccessMemory | None = None,
+    tracer=None,
 ) -> tuple[str, dict, list]:
     """Run the three-lane pipeline for one entity. Pure sync — safe to call
     from a thread pool worker alongside other entities."""
+    import time as _time
+    _t0 = _time.monotonic()
+    tr = tracer or NullTracer()
     resolved: dict[str, str] = {}
     cells: dict = {}
 
@@ -136,8 +141,20 @@ def _process_entity_sync(
         if not (probe_hit and probe_hit.value):
             continue
         extras = verify_probe_extraction(field, entity, probe_hit, search, claude)
-        cell = verify_field(field, [probe_hit] + extras)
+        all_extractions = [probe_hit] + extras
+        cell = verify_field(field, all_extractions)
         cells[field.id] = cell
+        tr.emit(
+            "verification",
+            entity=entity, field_id=field.id, field_type=field.type,
+            lane="probe",
+            candidates=len(all_extractions),
+            grounded=sum(1 for e in all_extractions if e.is_grounded),
+            winner_value=cell.value,
+            confidence=cell.confidence,
+            corroboration_count=cell.corroboration_count,
+            flags=cell.flags,
+        )
         if cell.value:
             resolved[field.id] = cell.value
         probe_handled.add(field.id)
@@ -150,11 +167,22 @@ def _process_entity_sync(
         batched = search_and_extract_batched(
             fields=lane2_fields, entity=entity,
             resolved_deps=resolved, tavily=search,
-            claude=claude, memory=memory,
+            claude=claude, memory=memory, tracer=tr,
         )
         for f in lane2_fields:
-            cell = verify_field(f, batched.get(f.id, []))
+            extractions = batched.get(f.id, [])
+            cell = verify_field(f, extractions)
             cells[f.id] = cell
+            tr.emit(
+                "verification",
+                entity=entity, field_id=f.id, field_type=f.type,
+                candidates=len(extractions),
+                grounded=sum(1 for e in extractions if e.is_grounded),
+                winner_value=cell.value,
+                confidence=cell.confidence,
+                corroboration_count=cell.corroboration_count,
+                flags=cell.flags,
+            )
             if cell.value:
                 resolved[f.id] = cell.value
 
@@ -166,11 +194,22 @@ def _process_entity_sync(
         batched_def = search_and_extract_batched(
             fields=deferred, entity=entity,
             resolved_deps=resolved, tavily=search,
-            claude=claude, memory=memory,
+            claude=claude, memory=memory, tracer=tr,
         )
         for f in deferred:
-            cell = verify_field(f, batched_def.get(f.id, []))
+            extractions = batched_def.get(f.id, [])
+            cell = verify_field(f, extractions)
             cells[f.id] = cell
+            tr.emit(
+                "verification",
+                entity=entity, field_id=f.id, field_type=f.type,
+                candidates=len(extractions),
+                grounded=sum(1 for e in extractions if e.is_grounded),
+                winner_value=cell.value,
+                confidence=cell.confidence,
+                corroboration_count=cell.corroboration_count,
+                flags=cell.flags,
+            )
             if cell.value:
                 resolved[f.id] = cell.value
 
@@ -179,6 +218,15 @@ def _process_entity_sync(
     if cells and not_found > len(cells) // 2:
         row_flags.append("majority_not_found")
 
+    import time as _time2
+    tr.emit(
+        "entity_done",
+        entity=entity,
+        elapsed_sec=round(_time2.monotonic() - _t0, 2),
+        found=sum(1 for c in cells.values() if c.value is not None),
+        not_found_fields=[fid for fid, c in cells.items() if c.value is None],
+        row_flags=row_flags,
+    )
     return entity, cells, row_flags
 
 
@@ -399,6 +447,18 @@ def api_run(
     )
     session_id = session_row.id
 
+    _LOGS_DIR = Path(os.getenv("LOGS_DIR", "logs"))
+    run_tracer = RunTracer(session_id, _LOGS_DIR)
+    run_tracer.emit(
+        "run_start",
+        question=plan.research_question_original,
+        entity_type=plan.entity_type,
+        entity_count=len(entities),
+        entities=entities,
+        columns=[{"id": c.id, "type": c.type, "label_en": c.label_en} for c in plan.columns],
+        search_engine=req.search_engine,
+    )
+
     def _sse(event: str, payload: dict) -> str:
         return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
@@ -489,7 +549,7 @@ def api_run(
             entity_tasks = [
                 asyncio.create_task(
                     asyncio.to_thread(
-                        _process_entity_sync, entity, plan, probe_results, search, claude, _memory,
+                        _process_entity_sync, entity, plan, probe_results, search, claude, _memory, run_tracer,
                     )
                 )
                 for entity in entities
@@ -562,6 +622,14 @@ def api_run(
             print(f"\n[error] /api/run finalisation failed →", file=sys.stderr)
             traceback.print_exc()
 
+        run_tracer.emit(
+            "run_done",
+            entity_count=len(results),
+            cost_usd=claude.totals.cost_usd,
+            tokens_in=claude.totals.input_tokens,
+            tokens_out=claude.totals.output_tokens,
+            trace_path=str(run_tracer.path),
+        )
         yield _sse("done", {
             "n": len(results),
             "session_id": session_id,
@@ -569,6 +637,7 @@ def api_run(
             "tokens_in": claude.totals.input_tokens,
             "tokens_out": claude.totals.output_tokens,
             "export": export_payload,
+            "trace_path": str(run_tracer.path),
         })
 
     return StreamingResponse(stream(), media_type="text/event-stream")

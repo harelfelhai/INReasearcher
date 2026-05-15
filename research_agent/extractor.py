@@ -31,6 +31,7 @@ from .memory import (
     format_extraction_examples,
     format_extraction_warnings,
 )
+from .tracer import NullTracer
 
 # ── Extractor tool (structured output enforcement) ────────────────────────────
 
@@ -341,6 +342,7 @@ def extract_from_source(
     resolved_deps: dict,
     client: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
+    tracer=None,
 ) -> ExtractionResult:
     """
     Ask Claude to extract one field from one source page.
@@ -417,7 +419,7 @@ def extract_from_source(
     elif raw_value:
         grounded, verified_quote = is_grounded(raw_value, source_content)
 
-    return ExtractionResult(
+    result = ExtractionResult(
         field_id=field.id,
         value=raw_value if grounded else None,
         quote_original=verified_quote if grounded else None,
@@ -426,6 +428,22 @@ def extract_from_source(
         is_grounded=grounded,
         extractor_confidence=llm_confidence if grounded else 0.0,
     )
+
+    tr = tracer or NullTracer()
+    tr.emit(
+        "extraction",
+        entity=entity,
+        field_id=field.id,
+        field_type=field.type,
+        url=source_url,
+        domain=_domain(source_url),
+        raw_value=raw_value,
+        is_grounded=grounded,
+        llm_confidence=llm_confidence,
+        not_found_reason=data.get("not_found_reason"),
+        quote_snippet=(verified_quote or "")[:120],
+    )
+    return result
 
 
 # ── Probe model (field-list axis) ────────────────────────────────────────────
@@ -662,6 +680,7 @@ def batch_extract_fields_from_source(
     source_url: str,
     source_content: str,
     client: anthropic.Anthropic,
+    tracer=None,
 ) -> dict[str, ExtractionResult]:
     """
     Extract multiple fields for one entity from a single page in ONE Claude call.
@@ -742,6 +761,17 @@ def batch_extract_fields_from_source(
                 is_grounded=False, extractor_confidence=0.0,
             )
 
+    tr = tracer or NullTracer()
+    tr.emit(
+        "batch_extraction",
+        entity=entity,
+        url=source_url,
+        domain=_domain(source_url),
+        field_results=[
+            {"field_id": fid, "value": r.value, "is_grounded": r.is_grounded}
+            for fid, r in results.items()
+        ],
+    )
     return results
 
 
@@ -1220,6 +1250,7 @@ def _gather_pages_for_field(
     resolved_deps: dict,
     tavily: TavilyClient,
     seen_urls: set[str] | None = None,
+    tracer=None,
 ) -> tuple[list[tuple[str, str]], list[ExtractionResult]]:
     """
     Run search queries for a field and return raw candidate pages
@@ -1246,6 +1277,7 @@ def _gather_pages_for_field(
 
     pages: list[tuple[str, str]] = []
     wikidata_results: list[ExtractionResult] = []
+    tr = tracer or NullTracer()
 
     is_wikipedia = isinstance(tavily, WikipediaSearchClient)
     query_cap = 3 if is_wikipedia else 6
@@ -1273,6 +1305,15 @@ def _gather_pages_for_field(
     # Fan out all search queries concurrently — each is independent I/O.
     all_queries = list((queries_he + queries_en)[:query_cap])
 
+    tr.emit(
+        "field_search",
+        entity=entity,
+        field_id=field.id,
+        field_type=field.type,
+        queries=all_queries,
+        engine=type(tavily).__name__,
+    )
+
     def _one_search(q: str) -> tuple[str, list]:
         try:
             return q, tavily.search(q, max_results=3, include_raw_content=True).get("results", [])
@@ -1292,10 +1333,22 @@ def _gather_pages_for_field(
                   + ", ".join(h.get("title", h.get("url", "?"))[:30] for h in hits[:3]))
         for hit in hits:
             url = hit.get("url", "")
-            if not url or url in seen_urls:
+            is_new = url not in seen_urls
+            content = hit.get("raw_content") or hit.get("content", "")
+            tr.emit(
+                "search_hit",
+                entity=entity,
+                field_id=field.id,
+                query=query,
+                url=url,
+                domain=_domain(url),
+                content_length=len(content) if content else 0,
+                is_new=is_new,
+                accepted=is_new and bool(content) and len(content) >= 80,
+            )
+            if not url or not is_new:
                 continue
             seen_urls.add(url)
-            content = hit.get("raw_content") or hit.get("content", "")
             if not content or len(content) < 80:
                 continue
             pages.append((url, content))
@@ -1343,6 +1396,7 @@ def search_and_extract_batched(
     tavily: TavilyClient,
     claude: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
+    tracer=None,
 ) -> dict[str, list[ExtractionResult]]:
     """
     Process MULTIPLE fields for one entity with cross-field page deduplication.
@@ -1369,7 +1423,7 @@ def search_and_extract_batched(
     all_urls_with_content: dict[str, str] = {}
     for field in fields:
         pages, wikidata_results = _gather_pages_for_field(
-            field, entity, resolved_deps, tavily, seen_urls=shared_seen,
+            field, entity, resolved_deps, tavily, seen_urls=shared_seen, tracer=tracer,
         )
         results[field.id].extend(wikidata_results)
         for url, content in pages:
@@ -1388,7 +1442,7 @@ def search_and_extract_batched(
             batch = batch_extract_fields_from_source(
                 fields=fields, entity=entity,
                 source_url=url, source_content=content,
-                client=claude,
+                client=claude, tracer=tracer,
             )
             for fid, ext in batch.items():
                 if ext.is_grounded and ext.value:
@@ -1400,6 +1454,7 @@ def search_and_extract_batched(
                 field=field, entity=entity,
                 source_url=url, source_content=content,
                 resolved_deps=resolved_deps, client=claude, memory=memory,
+                tracer=tracer,
             )
             if ext.is_grounded and ext.value:
                 results[field.id].append(ext)
