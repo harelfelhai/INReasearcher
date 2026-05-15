@@ -115,6 +115,17 @@ _SCHEMA_TOOL = {
                             "type": "string",
                             "enum": ["person_name", "url", "date", "free_text", "organization", "number"],
                         },
+                        "volatility": {
+                            "type": "string",
+                            "enum": ["stable", "volatile"],
+                            "description": (
+                                "'stable' = historical or slowly-changing fact (founding year, "
+                                "historical officeholder, country of origin). "
+                                "'volatile' = can change over time (current CEO, price, "
+                                "contact info, operating status, opening hours, current address). "
+                                "When in doubt: if a source from 3 years ago could be wrong today, use 'volatile'."
+                            ),
+                        },
                         "temporal_anchor": {
                             "type": "string",
                             "description": (
@@ -124,7 +135,7 @@ _SCHEMA_TOOL = {
                         },
                         "depends_on": {"type": "string"},
                     },
-                    "required": ["id", "label_he", "label_en", "type"],
+                    "required": ["id", "label_he", "label_en", "type", "volatility"],
                 },
             },
         },
@@ -142,6 +153,10 @@ Naming rules:
   - id: snake_case, descriptive, include temporal anchor if any
         (e.g. 'mayor_1990', not 'mayor')
   - label_he / label_en: human-readable column headers
+  - volatility: REQUIRED. 'stable' for historical/slowly-changing facts;
+        'volatile' for anything that could be wrong if the source is 3 years old
+        (current officeholders, contact info, prices, hours, status, addresses).
+        Fields with a temporal_anchor are almost always 'stable'.
   - temporal_anchor: REQUIRED for any historical or time-bounded field
   - depends_on: id of a field that must resolve first
         (e.g. 'idf_service' depends_on 'full_name')

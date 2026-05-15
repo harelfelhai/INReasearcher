@@ -21,6 +21,7 @@ class ColumnPlan(BaseModel):
     label_he: str
     label_en: str
     type: Literal["person_name", "url", "date", "free_text", "organization", "number"]
+    volatility: Literal["stable", "volatile"] = "stable"  # stable=historical, volatile=can change
     temporal_anchor: Optional[str] = None          # e.g. "1990"
     search_queries_he: List[str] = Field(default_factory=list)   # populated in Phase B2
     search_queries_en: List[str] = Field(default_factory=list)   # populated in Phase B2
@@ -45,6 +46,7 @@ class ExtractionResult(BaseModel):
     source_domain: str
     is_grounded: bool                   # passed the substring grounding check
     extractor_confidence: float         # 0.0–1.0 self-reported by LLM
+    publication_date: Optional[str] = None  # ISO date of the source page, best-effort
 
 
 class VerifiedCell(BaseModel):
@@ -53,7 +55,7 @@ class VerifiedCell(BaseModel):
     value: Optional[str]
     confidence: Literal["HIGH", "MEDIUM", "LOW", "NOT_FOUND"]
     corroboration_count: int
-    primary_source: Optional[dict] = None
+    primary_source: Optional[dict] = None   # includes url, domain, quote, date
     all_sources: List[dict] = Field(default_factory=list)
     flags: List[str] = Field(default_factory=list)
 

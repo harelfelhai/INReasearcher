@@ -284,7 +284,21 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
                             >
                               {cell.primary_source.domain ?? new URL(cell.primary_source.url).hostname}
                             </a>
+                            {cell.primary_source.date && (
+                              <span className={
+                                cell.flags?.some(f => f.startsWith("all_sources_stale") || f.startsWith("primary_source_stale"))
+                                  ? "text-amber-600 mr-1"
+                                  : "text-slate-400 mr-1"
+                              }>
+                                {" "}· {cell.primary_source.date.slice(0, 7)}
+                              </span>
+                            )}
                           </>
+                        )}
+                        {cell.flags?.some(f => f.startsWith("all_sources_stale")) && (
+                          <span className="text-amber-600 mr-1" title="כל המקורות ישנים מ-2 שנים — ייתכן שהמידע אינו עדכני">
+                            {" "}⚠ ישן
+                          </span>
                         )}
                       </div>
                     </td>

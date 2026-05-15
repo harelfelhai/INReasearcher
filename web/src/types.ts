@@ -15,6 +15,7 @@ export interface ColumnPlan {
   label_he: string;
   label_en: string;
   type: ColumnType;
+  volatility: "stable" | "volatile";
   temporal_anchor?: string | null;
   search_queries_he: string[];
   search_queries_en: string[];
@@ -120,7 +121,7 @@ export interface VerifiedCell {
   value: string | null;
   confidence: Confidence;
   corroboration_count: number;
-  primary_source?: { url?: string; quote?: string; domain?: string } | null;
+  primary_source?: { url?: string; quote?: string; domain?: string; date?: string | null } | null;
   all_sources: unknown[];
   flags: string[];
 }

@@ -219,6 +219,15 @@
             ],
             "title": "Type",
             "type": "string"
+          },
+          "volatility": {
+            "default": "stable",
+            "enum": [
+              "stable",
+              "volatile"
+            ],
+            "title": "Volatility",
+            "type": "string"
           }
         },
         "required": [

@@ -345,6 +345,7 @@ def extract_from_source(
     client: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
     tracer=None,
+    publication_date: str | None = None,
 ) -> ExtractionResult:
     """
     Ask Claude to extract one field from one source page.
@@ -429,6 +430,7 @@ def extract_from_source(
         source_domain=_domain(source_url),
         is_grounded=grounded,
         extractor_confidence=llm_confidence if grounded else 0.0,
+        publication_date=publication_date,
     )
 
     tr = tracer or NullTracer()
@@ -683,6 +685,7 @@ def batch_extract_fields_from_source(
     source_content: str,
     client: anthropic.Anthropic,
     tracer=None,
+    publication_date: str | None = None,
 ) -> dict[str, ExtractionResult]:
     """
     Extract multiple fields for one entity from a single page in ONE Claude call.
@@ -751,6 +754,7 @@ def batch_extract_fields_from_source(
             source_domain=_domain(source_url),
             is_grounded=grounded,
             extractor_confidence=confidence if grounded else 0.0,
+            publication_date=publication_date,
         )
 
     # Fill in any field the LLM forgot to return.
@@ -761,6 +765,7 @@ def batch_extract_fields_from_source(
                 value=None, quote_original=None,
                 source_url=source_url, source_domain=_domain(source_url),
                 is_grounded=False, extractor_confidence=0.0,
+                publication_date=publication_date,
             )
 
     tr = tracer or NullTracer()
@@ -1246,6 +1251,53 @@ def _inject_wikidata(entity: str, field, results: list, seen_urls: set) -> None:
         print(f"    [wikidata error] {exc}")
 
 
+_DATE_FROM_URL_RE = re.compile(r'/(\d{4})/(\d{1,2})/(\d{1,2})/')
+_DATE_FROM_URL_SHORT_RE = re.compile(r'[/_-](\d{4})(\d{2})(\d{2})[/_.-]')
+_DATE_FROM_TEXT_RE = re.compile(
+    # ISO: 2023-04-15 or 2023/04/15
+    r'\b(20\d{2})[-/](0[1-9]|1[0-2])[-/](0[1-9]|[12]\d|3[01])\b'
+)
+
+
+def _extract_source_date(hit: dict, content: str) -> str | None:
+    """
+    Best-effort extraction of a publication/update date for a search result.
+    Returns an ISO-format string (YYYY-MM-DD or YYYY-MM) or None.
+
+    Priority:
+      1. Tavily's published_date field (most reliable when present)
+      2. Date pattern in the URL path (/2023/04/15/)
+      3. ISO date pattern near the start of the content text
+    """
+    # 1. Tavily metadata
+    raw = hit.get("published_date") or hit.get("publishedDate") or ""
+    if raw:
+        # Normalise to YYYY-MM-DD or YYYY-MM
+        m = re.match(r'(\d{4}-\d{2}-\d{2})', str(raw))
+        if m:
+            return m.group(1)
+        m = re.match(r'(\d{4}-\d{2})', str(raw))
+        if m:
+            return m.group(1)
+
+    # 2. URL date pattern
+    url = hit.get("url", "")
+    m = _DATE_FROM_URL_RE.search(url)
+    if m:
+        return f"{m.group(1)}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
+    m = _DATE_FROM_URL_SHORT_RE.search(url)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    # 3. ISO date in the first 1000 chars of content (article datelines, bylines)
+    snippet = (content or "")[:1000]
+    m = _DATE_FROM_TEXT_RE.search(snippet)
+    if m:
+        return f"{m.group(1)}-{m.group(2)}-{m.group(3)}"
+
+    return None
+
+
 def _extract_pdf_text(url: str, timeout: int = 15) -> str | None:
     """
     Fetch a PDF URL and extract its text via pdfplumber.
@@ -1314,7 +1366,8 @@ def _gather_pages_for_field(
     tavily: TavilyClient,
     seen_urls: set[str] | None = None,
     tracer=None,
-) -> tuple[list[tuple[str, str]], list[ExtractionResult]]:
+) -> tuple[list[tuple[str, str, str | None]], list[ExtractionResult]]:
+    """Returns (pages, wikidata_results) where each page is (url, content, date)."""
     """
     Run search queries for a field and return raw candidate pages
     (no LLM extraction yet).
@@ -1338,7 +1391,7 @@ def _gather_pages_for_field(
             bonus = [q.replace("{entity}", dep_val) for q in field.search_queries_he[:2]]
             queries_he = queries_he + bonus
 
-    pages: list[tuple[str, str]] = []
+    pages: list[tuple[str, str, str | None]] = []
     wikidata_results: list[ExtractionResult] = []
     tr = tracer or NullTracer()
 
@@ -1363,7 +1416,7 @@ def _gather_pages_for_field(
                 seen_urls.add(url)
                 content = hit.get("raw_content") or hit.get("content", "")
                 if content and len(content) >= 80:
-                    pages.append((url, content))
+                    pages.append((url, content, _extract_source_date(hit, content)))
 
     # Fan out all search queries concurrently — each is independent I/O.
     all_queries = list((queries_he + queries_en)[:query_cap])
@@ -1408,6 +1461,7 @@ def _gather_pages_for_field(
                 if pdf_text:
                     content = pdf_text
 
+            pub_date = _extract_source_date(hit, content)
             tr.emit(
                 "search_hit",
                 entity=entity,
@@ -1419,13 +1473,14 @@ def _gather_pages_for_field(
                 is_new=is_new,
                 accepted=is_new and bool(content) and len(content) >= 80,
                 pdf_fallback=is_new and _is_pdf_url(url),
+                publication_date=pub_date,
             )
             if not url or not is_new:
                 continue
             seen_urls.add(url)
             if not content or len(content) < 80:
                 continue
-            pages.append((url, content))
+            pages.append((url, content, pub_date))
 
     return pages, wikidata_results
 
@@ -1449,11 +1504,12 @@ def search_and_extract(
     """
     pages, results = _gather_pages_for_field(field, entity, resolved_deps, tavily)
 
-    for url, content in pages:
+    for url, content, pub_date in pages:
         extraction = extract_from_source(
             field=field, entity=entity,
             source_url=url, source_content=content,
             resolved_deps=resolved_deps, client=claude, memory=memory,
+            publication_date=pub_date,
         )
         if extraction.is_grounded and extraction.value:
             results.append(extraction)
@@ -1494,14 +1550,14 @@ def search_and_extract_batched(
     # Phase 1 — gather pages per field. SHARED seen_urls avoids re-fetching
     # the same URL across fields' search phases.
     shared_seen: set[str] = set()
-    all_urls_with_content: dict[str, str] = {}
+    all_urls_with_content: dict[str, tuple[str, str | None]] = {}
     for field in fields:
         pages, wikidata_results = _gather_pages_for_field(
             field, entity, resolved_deps, tavily, seen_urls=shared_seen, tracer=tracer,
         )
         results[field.id].extend(wikidata_results)
-        for url, content in pages:
-            all_urls_with_content.setdefault(url, content)
+        for url, content, pub_date in pages:
+            all_urls_with_content.setdefault(url, (content, pub_date))
 
     if not all_urls_with_content:
         return results
@@ -1512,23 +1568,23 @@ def search_and_extract_batched(
     if len(fields) >= 2:
         print(f"    [batch] entity={entity!r}: {n_pages} unique page(s) × "
               f"{len(fields)} field(s) — one batched extract per page")
-        for url, content in all_urls_with_content.items():
+        for url, (content, pub_date) in all_urls_with_content.items():
             batch = batch_extract_fields_from_source(
                 fields=fields, entity=entity,
                 source_url=url, source_content=content,
-                client=claude, tracer=tracer,
+                client=claude, tracer=tracer, publication_date=pub_date,
             )
             for fid, ext in batch.items():
                 if ext.is_grounded and ext.value:
                     results[fid].append(ext)
     else:
         field = fields[0]
-        for url, content in all_urls_with_content.items():
+        for url, (content, pub_date) in all_urls_with_content.items():
             ext = extract_from_source(
                 field=field, entity=entity,
                 source_url=url, source_content=content,
                 resolved_deps=resolved_deps, client=claude, memory=memory,
-                tracer=tracer,
+                tracer=tracer, publication_date=pub_date,
             )
             if ext.is_grounded and ext.value:
                 results[field.id].append(ext)

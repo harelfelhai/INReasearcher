@@ -16,8 +16,35 @@ Key design decisions:
 """
 
 from collections import Counter
+from datetime import date, timedelta
+
 from .models import ColumnPlan, ExtractionResult, VerifiedCell
 from .hebrew_utils import normalize_hebrew
+
+_STALE_THRESHOLD = timedelta(days=730)   # sources older than 2 years flagged for volatile fields
+
+
+def _parse_date(date_str: str | None) -> date | None:
+    if not date_str:
+        return None
+    try:
+        parts = date_str.split("-")
+        if len(parts) == 3:
+            return date(int(parts[0]), int(parts[1]), int(parts[2]))
+        if len(parts) == 2:
+            return date(int(parts[0]), int(parts[1]), 1)
+        if len(parts) == 1 and len(date_str) == 4:
+            return date(int(date_str), 1, 1)
+    except (ValueError, IndexError):
+        pass
+    return None
+
+
+def _is_stale(date_str: str | None) -> bool:
+    d = _parse_date(date_str)
+    if d is None:
+        return False
+    return (date.today() - d) > _STALE_THRESHOLD
 
 
 def _is_preferred(domain: str, preferred: list[str]) -> bool:
@@ -117,11 +144,23 @@ def verify_field(
         confidence = "HIGH"
         flags.append("preferred_source_boost")
 
+    # Recency check for volatile fields
+    best_date = best.publication_date
+    if getattr(field, "volatility", "stable") == "volatile":
+        dated_sources = [e for e in grounded if e.publication_date]
+        if dated_sources and all(_is_stale(e.publication_date) for e in dated_sources):
+            flags.append(f"all_sources_stale:oldest={min(e.publication_date for e in dated_sources)}")
+            if confidence == "HIGH":
+                confidence = "MEDIUM"
+        elif best_date and _is_stale(best_date):
+            flags.append(f"primary_source_stale:{best_date}")
+
     primary_source = {
         "url": best.source_url,
         "domain": best.source_domain,
         "quote": best.quote_original,
         "llm_confidence": best.extractor_confidence,
+        "date": best_date,
     }
 
     all_sources = [
@@ -130,6 +169,7 @@ def verify_field(
             "domain": e.source_domain,
             "quote": e.quote_original,
             "llm_confidence": e.extractor_confidence,
+            "date": e.publication_date,
         }
         for e in grounded
     ]
