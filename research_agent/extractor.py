@@ -19,7 +19,9 @@ Cost control levers:
   - Source content is truncated to 4000 chars (covers most useful content)
 """
 
+import io
 import re
+import urllib.request
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
 from tavily import TavilyClient
@@ -1244,6 +1246,67 @@ def _inject_wikidata(entity: str, field, results: list, seen_urls: set) -> None:
         print(f"    [wikidata error] {exc}")
 
 
+def _extract_pdf_text(url: str, timeout: int = 15) -> str | None:
+    """
+    Fetch a PDF URL and extract its text via pdfplumber.
+
+    Called as a fallback when Tavily returns a PDF link with no usable content.
+    Returns extracted text, or None on any failure (network error, encrypted
+    PDF, image-only scan, etc.). Failures are non-fatal — the URL is simply
+    skipped, same as today.
+
+    Limits:
+      - First 30 pages only (avoids huge documents)
+      - Text capped at _BUDGET chars before returning (windowing runs later)
+    """
+    try:
+        import pdfplumber
+    except ImportError:
+        return None
+
+    _MAX_PAGES = 30
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (compatible; INResearcher/1.0; "
+                    "+https://github.com/harelfelhai/inreasearcher)"
+                )
+            },
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+    except Exception as exc:
+        print(f"    [pdf-fetch] {url[:70]!r}: {exc}")
+        return None
+
+    try:
+        pages_text: list[str] = []
+        with pdfplumber.open(io.BytesIO(raw)) as pdf:
+            for page in pdf.pages[:_MAX_PAGES]:
+                text = page.extract_text() or ""
+                if text.strip():
+                    pages_text.append(text)
+        result = "\n\n".join(pages_text)
+        if len(result) < 80:
+            return None
+        print(
+            f"    [pdf] extracted {len(result):,} chars "
+            f"from {len(pages_text)} page(s): {url[:70]!r}"
+        )
+        return result[:_BUDGET * 3]   # windowing trims further
+    except Exception as exc:
+        print(f"    [pdf] extraction failed for {url[:70]!r}: {exc}")
+        return None
+
+
+def _is_pdf_url(url: str) -> bool:
+    """Heuristic: URL path ends in .pdf or contains /pdf/ segment."""
+    lower = url.lower().split("?")[0]
+    return lower.endswith(".pdf") or "/pdf/" in lower
+
+
 def _gather_pages_for_field(
     field: ColumnPlan,
     entity: str,
@@ -1335,6 +1398,16 @@ def _gather_pages_for_field(
             url = hit.get("url", "")
             is_new = url not in seen_urls
             content = hit.get("raw_content") or hit.get("content", "")
+
+            # PDF fallback: Tavily often returns empty raw_content for PDF
+            # links. Attempt direct fetch + pdfplumber extraction before
+            # discarding the URL — these are frequently the most authoritative
+            # sources for government/legal research.
+            if is_new and _is_pdf_url(url) and (not content or len(content) < 80):
+                pdf_text = _extract_pdf_text(url)
+                if pdf_text:
+                    content = pdf_text
+
             tr.emit(
                 "search_hit",
                 entity=entity,
@@ -1345,6 +1418,7 @@ def _gather_pages_for_field(
                 content_length=len(content) if content else 0,
                 is_new=is_new,
                 accepted=is_new and bool(content) and len(content) >= 80,
+                pdf_fallback=is_new and _is_pdf_url(url),
             )
             if not url or not is_new:
                 continue
