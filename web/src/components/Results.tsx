@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { downloadExport, runResearch, type RunDonePayload, type SeededProbe } from "../api";
-import type { EntityResult, ResearchPlan, SearchEngine } from "../types";
+import { downloadExport, runResearch, submitFeedback, type RunDonePayload, type SeededProbe } from "../api";
+import type { CellFeedback, EntityResult, ResearchPlan, SearchEngine } from "../types";
 
 interface Props {
   plan: ResearchPlan;
@@ -9,6 +9,162 @@ interface Props {
   seededProbe?: SeededProbe;
   onRestart: () => void;
 }
+
+// ── Post-run feedback panel ───────────────────────────────────────────────────
+
+interface FeedbackState {
+  [entityField: string]: { is_correct: boolean; correct_value: string };
+}
+
+function FeedbackPanel({ results, plan, sessionId }: {
+  results: EntityResult[];
+  plan: ResearchPlan;
+  sessionId: string;
+}) {
+  const [feedback, setFeedback] = useState<FeedbackState>({});
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [stats, setStats] = useState<{ successes: number; failures: number } | null>(null);
+
+  const key = (entity: string, fieldId: string) => `${entity}||${fieldId}`;
+
+  function toggle(entity: string, fieldId: string, is_correct: boolean) {
+    setFeedback((prev) => ({
+      ...prev,
+      [key(entity, fieldId)]: { is_correct, correct_value: prev[key(entity, fieldId)]?.correct_value ?? "" },
+    }));
+  }
+
+  function setCorrection(entity: string, fieldId: string, val: string) {
+    setFeedback((prev) => ({
+      ...prev,
+      [key(entity, fieldId)]: { ...prev[key(entity, fieldId)], correct_value: val },
+    }));
+  }
+
+  async function submit() {
+    const cells: CellFeedback[] = Object.entries(feedback).map(([k, v]) => {
+      const [entity_name, field_id] = k.split("||");
+      return {
+        entity_name,
+        field_id,
+        is_correct: v.is_correct,
+        correct_value: v.is_correct ? null : (v.correct_value || null),
+      };
+    });
+    if (cells.length === 0) return;
+    setSubmitting(true);
+    setError(null);
+    try {
+      const res = await submitFeedback(sessionId, cells);
+      setStats({ successes: res.recorded_successes, failures: res.recorded_failures });
+      setSubmitted(true);
+    } catch (e) {
+      setError((e as Error).message);
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  const reviewedCount = Object.keys(feedback).length;
+  const valuedCells = results.flatMap((r) =>
+    plan.columns.filter((c) => r.cells[c.id]?.value).map((c) => ({ entity: r.entity_name, col: c }))
+  );
+
+  if (submitted && stats) {
+    return (
+      <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-4 text-sm text-emerald-800">
+        ✓ משוב נשמר — {stats.successes} תקינים, {stats.failures} שגויים. השיפורים ייכנסו לתוקף בהרצה הבאה.
+      </div>
+    );
+  }
+
+  return (
+    <details className="bg-white border border-slate-200 rounded-xl shadow-sm">
+      <summary className="p-4 cursor-pointer font-medium text-sm select-none">
+        סקירת תוצאות לשיפור עתידי
+        <span className="text-slate-400 font-normal mr-2">
+          ({reviewedCount}/{valuedCells.length} סומנו)
+        </span>
+      </summary>
+      <div className="p-4 pt-0 space-y-3">
+        <p className="text-xs text-slate-500">
+          סמן כל תא כנכון או שגוי. התשובות ישמרו כדוגמאות לשיפור ההרצות הבאות.
+        </p>
+        <div className="overflow-x-auto">
+          <table className="text-sm w-full">
+            <thead className="bg-slate-50 text-right">
+              <tr>
+                <th className="p-2">ישות</th>
+                <th className="p-2">שדה</th>
+                <th className="p-2">ערך</th>
+                <th className="p-2">נכון?</th>
+                <th className="p-2">ערך נכון (אם שגוי)</th>
+              </tr>
+            </thead>
+            <tbody>
+              {valuedCells.map(({ entity, col }) => {
+                const cell = results.find((r) => r.entity_name === entity)?.cells[col.id];
+                const fb = feedback[key(entity, col.id)];
+                return (
+                  <tr key={key(entity, col.id)} className="border-t border-slate-100">
+                    <td className="p-2" dir="auto">{entity}</td>
+                    <td className="p-2 text-slate-500 font-mono text-xs">{col.id}</td>
+                    <td className="p-2" dir="auto">{cell?.value}</td>
+                    <td className="p-2 whitespace-nowrap">
+                      <button
+                        onClick={() => toggle(entity, col.id, true)}
+                        className={`px-2 py-0.5 rounded text-xs mr-1 border ${
+                          fb?.is_correct === true
+                            ? "bg-emerald-100 border-emerald-400 text-emerald-800"
+                            : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >✓ נכון</button>
+                      <button
+                        onClick={() => toggle(entity, col.id, false)}
+                        className={`px-2 py-0.5 rounded text-xs border ${
+                          fb?.is_correct === false
+                            ? "bg-rose-100 border-rose-400 text-rose-800"
+                            : "border-slate-300 text-slate-600 hover:bg-slate-50"
+                        }`}
+                      >✗ שגוי</button>
+                    </td>
+                    <td className="p-2">
+                      {fb?.is_correct === false && (
+                        <input
+                          type="text"
+                          placeholder="הזן ערך נכון"
+                          value={fb.correct_value}
+                          onChange={(e) => setCorrection(entity, col.id, e.target.value)}
+                          className="border border-slate-300 rounded px-2 py-0.5 text-xs w-40"
+                          dir="auto"
+                        />
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        {error && <div className="text-xs text-rose-700">{error}</div>}
+        <div className="flex justify-end">
+          <button
+            onClick={submit}
+            disabled={submitting || reviewedCount === 0}
+            className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50"
+          >
+            {submitting ? "שולח…" : "שלח משוב"}
+          </button>
+        </div>
+      </div>
+    </details>
+  );
+}
+
+
+// ── Main Results component ────────────────────────────────────────────────────
 
 export default function Results({ plan, entities, searchEngine, seededProbe, onRestart }: Props) {
   const [results, setResults] = useState<EntityResult[]>([]);
@@ -139,6 +295,10 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
           </tbody>
         </table>
       </div>
+
+      {status === "done" && results.length > 0 && doneInfo?.session_id && (
+        <FeedbackPanel results={results} plan={plan} sessionId={doneInfo.session_id} />
+      )}
     </div>
   );
 }

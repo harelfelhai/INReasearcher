@@ -105,7 +105,10 @@ def test_critical_paths_remain_in_schema():
         "/api/discover-entities/run",
         "/api/admin/users",
         "/api/admin/users/{user_id}/budget",
+        "/api/admin/memory/seed",
+        "/api/admin/memory/stats",
         "/api/user/sessions",
         "/api/user/exports/{export_id}",
+        "/api/sessions/{session_id}/feedback",
     ):
         assert required in paths, f"missing endpoint: {required}"

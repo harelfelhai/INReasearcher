@@ -131,10 +131,13 @@ def complete_session(
     *,
     status: str,
     cost_used: float,
+    results: list[dict] | None = None,
 ) -> models.ResearchSession:
     session.status = status
     session.cost_used = float(cost_used)
     session.completed_at = datetime.utcnow()
+    if results is not None:
+        session.results_json = json.dumps(results, ensure_ascii=False)
     db.commit()
     db.refresh(session)
     return session

@@ -49,6 +49,7 @@ class ResearchSession(Base):
     entity_type = Column(String, nullable=True)
     entity_list_json = Column(Text, nullable=True)      # JSON-encoded list
     plan_json = Column(Text, nullable=True)             # JSON-encoded ResearchPlan
+    results_json = Column(Text, nullable=True)          # JSON-encoded list[entity_done payloads]
     status = Column(String, nullable=False, default="running")
     cost_used = Column(Float, nullable=False, default=0.0)
     created_at = Column(DateTime, nullable=False, default=datetime.utcnow)

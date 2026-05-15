@@ -46,6 +46,7 @@ from research_agent.compiler import (
     enrich_with_queries,
     plan_entity_discovery,
 )
+from research_agent.memory import SuccessMemory
 from research_agent.extractor import (
     search_and_extract_batched,
     probe_field_list,
@@ -71,14 +72,18 @@ from research_agent.output import write_xlsx
 
 from auth import crud
 from auth.db import SessionLocal, get_db, init_db
-from auth.deps import get_current_user
+from auth.deps import get_current_user, require_admin
 from auth.models import User
 from auth.router import auth_router, admin_router, user_router
+from auth.schemas import FeedbackRequest, MemorySeedRequest, MemoryStatsOut
 from auth.usage_tracker import TrackedAnthropic
 
 load_dotenv()
 
 app = FastAPI(title="Autonomous Research Agent API", version="0.2.0")
+
+_MEMORY_PATH = Path(os.getenv("MEMORY_PATH", "memory.json"))
+_memory: SuccessMemory | None = None
 
 # CORS for the Vite dev server (default port 5173)
 app.add_middleware(
@@ -91,12 +96,15 @@ app.add_middleware(
 
 @app.on_event("startup")
 def _on_startup() -> None:
+    global _memory
     init_db()
     db = SessionLocal()
     try:
         crud.ensure_default_admin(db)
     finally:
         db.close()
+    _memory = SuccessMemory(_MEMORY_PATH)
+    print(f"[memory] loaded {_MEMORY_PATH}: {_memory.stats()}", file=sys.stderr)
 
 
 app.include_router(auth_router)
@@ -112,6 +120,7 @@ def _process_entity_sync(
     probe_results: dict,
     search,
     claude,
+    memory: SuccessMemory | None = None,
 ) -> tuple[str, dict, list]:
     """Run the three-lane pipeline for one entity. Pure sync — safe to call
     from a thread pool worker alongside other entities."""
@@ -141,7 +150,7 @@ def _process_entity_sync(
         batched = search_and_extract_batched(
             fields=lane2_fields, entity=entity,
             resolved_deps=resolved, tavily=search,
-            claude=claude, memory=None,
+            claude=claude, memory=memory,
         )
         for f in lane2_fields:
             cell = verify_field(f, batched.get(f.id, []))
@@ -157,7 +166,7 @@ def _process_entity_sync(
         batched_def = search_and_extract_batched(
             fields=deferred, entity=entity,
             resolved_deps=resolved, tavily=search,
-            claude=claude, memory=None,
+            claude=claude, memory=memory,
         )
         for f in deferred:
             cell = verify_field(f, batched_def.get(f.id, []))
@@ -292,7 +301,7 @@ def api_compile_schema(
     _user: User = Depends(get_current_user),
 ) -> CompileResponse:
     """Phase A preflight + Phase B1 bare schema."""
-    result = compile_schema(req.question, req.entity_type, _claude())
+    result = compile_schema(req.question, req.entity_type, _claude(), memory=_memory)
     if isinstance(result, ClarificationRequest):
         return CompileResponse(kind="clarification", clarification=result)
     return CompileResponse(kind="plan", plan=result.plan)
@@ -480,7 +489,7 @@ def api_run(
             entity_tasks = [
                 asyncio.create_task(
                     asyncio.to_thread(
-                        _process_entity_sync, entity, plan, probe_results, search, claude,
+                        _process_entity_sync, entity, plan, probe_results, search, claude, _memory,
                     )
                 )
                 for entity in entities
@@ -521,10 +530,16 @@ def api_run(
             try:
                 sess = crud.get_session(db2, session_id)
                 if sess is not None:
+                    results_dicts = [
+                        {"entity_name": r.entity_name,
+                         "cells": {k: v.model_dump() for k, v in r.cells.items()}}
+                        for r in results
+                    ]
                     crud.complete_session(
                         db2, sess,
                         status=final_status,
                         cost_used=claude.totals.cost_usd,
+                        results=results_dicts,
                     )
                 if results:
                     filename = f"{session_id}.xlsx"
@@ -557,3 +572,125 @@ def api_run(
         })
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ── Memory: post-run cell feedback ───────────────────────────────────────────
+
+@app.post("/api/sessions/{session_id}/feedback")
+def api_session_feedback(
+    session_id: str,
+    req: FeedbackRequest,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+) -> dict:
+    """Record per-cell feedback for a completed session into the memory store.
+
+    Each correct cell becomes a positive few-shot example for future runs of
+    the same field type. Each incorrect cell becomes a negative warning.
+    """
+    if _memory is None:
+        raise HTTPException(503, "Memory system not initialised")
+    sess = crud.get_session(db, session_id)
+    if not sess or sess.user_id != user.id:
+        raise HTTPException(404, "Session not found")
+    if not sess.results_json or not sess.plan_json:
+        raise HTTPException(400, "Session has no stored results to review")
+
+    try:
+        results_data: list[dict] = json.loads(sess.results_json)
+        plan_data: dict = json.loads(sess.plan_json)
+    except (json.JSONDecodeError, TypeError):
+        raise HTTPException(500, "Could not parse stored session data")
+
+    # Build fast lookups
+    cell_lookup: dict[str, dict[str, dict]] = {
+        er["entity_name"]: er.get("cells", {})
+        for er in results_data
+    }
+    field_meta: dict[str, dict] = {col["id"]: col for col in plan_data.get("columns", [])}
+
+    n_successes = n_failures = 0
+    any_correct = False
+
+    for fb in req.cells:
+        cell = cell_lookup.get(fb.entity_name, {}).get(fb.field_id, {})
+        meta = field_meta.get(fb.field_id, {})
+        value = cell.get("value") or ""
+        quote = cell.get("quote_original") or ""
+        source_url = cell.get("source_url") or ""
+        source_domain = cell.get("source_domain") or ""
+        ftype = meta.get("type", "text")
+        flabel = meta.get("label_en") or meta.get("label_he") or fb.field_id
+
+        if fb.is_correct and value:
+            _memory.record_extraction_success(
+                field_id=fb.field_id, field_label=flabel, field_type=ftype,
+                entity=fb.entity_name, value=value, quote=quote,
+                source_url=source_url, source_domain=source_domain,
+            )
+            n_successes += 1
+            any_correct = True
+        elif not fb.is_correct:
+            reason = "User marked as incorrect"
+            if fb.correct_value:
+                reason += f" — correct value: {fb.correct_value}"
+            _memory.record_extraction_failure(
+                field_id=fb.field_id, field_type=ftype, entity=fb.entity_name,
+                claimed_value=value or None, claimed_quote=quote or None,
+                source_url=source_url, source_domain=source_domain,
+                reason=reason,
+            )
+            n_failures += 1
+
+    if any_correct:
+        _memory.record_compiler_success(
+            research_question=sess.question,
+            entity_type=sess.entity_type or "",
+            plan=plan_data,
+        )
+
+    return {
+        "recorded_successes": n_successes,
+        "recorded_failures": n_failures,
+        "memory_stats": _memory.stats(),
+    }
+
+
+# ── Memory: admin seeding + stats ────────────────────────────────────────────
+
+@app.post("/api/admin/memory/seed")
+def api_memory_seed(
+    req: MemorySeedRequest,
+    _admin: User = Depends(require_admin),
+) -> dict:
+    """Manually inject a curated example into the memory store."""
+    if _memory is None:
+        raise HTTPException(503, "Memory system not initialised")
+    from urllib.parse import urlparse
+    domain = req.source_domain or urlparse(req.source_url).netloc or ""
+    fid = req.field_label.lower().replace(" ", "_")
+
+    if req.kind == "success":
+        rid = _memory.record_extraction_success(
+            field_id=fid, field_label=req.field_label, field_type=req.field_type,
+            entity=req.entity, value=req.value, quote=req.quote,
+            source_url=req.source_url, source_domain=domain,
+        )
+    else:
+        if not req.reason:
+            raise HTTPException(400, "reason is required for failure records")
+        rid = _memory.record_extraction_failure(
+            field_id=fid, field_type=req.field_type, entity=req.entity,
+            claimed_value=req.value or None, claimed_quote=req.quote or None,
+            source_url=req.source_url, source_domain=domain,
+            reason=req.reason,
+        )
+    return {"id": rid, "stats": _memory.stats()}
+
+
+@app.get("/api/admin/memory/stats", response_model=MemoryStatsOut)
+def api_memory_stats(_admin: User = Depends(require_admin)) -> dict:
+    """Return current memory store sizes."""
+    if _memory is None:
+        raise HTTPException(503, "Memory system not initialised")
+    return {**_memory.stats(), "path": str(_memory.path)}

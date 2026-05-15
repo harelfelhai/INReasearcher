@@ -1,5 +1,6 @@
 import type {
   AuthUser,
+  CellFeedback,
   ClarificationRequest,
   EntityDiscoveryPlan,
   EntityDiscoveryResult,
@@ -7,6 +8,8 @@ import type {
   FieldAuditReport,
   LoginResponse,
   ManagedUser,
+  MemorySeedRequest,
+  MemoryStats,
   MockRow,
   ResearchPlan,
   SearchEngine,
@@ -299,4 +302,35 @@ export function runResearch(
   })();
 
   return ctrl;
+}
+
+// ── Memory feedback + seeding ─────────────────────────────────────────────────
+
+export async function submitFeedback(
+  sessionId: string,
+  cells: CellFeedback[],
+): Promise<{ recorded_successes: number; recorded_failures: number; memory_stats: MemoryStats }> {
+  const r = await fetch(`/api/sessions/${sessionId}/feedback`, {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ cells }),
+  });
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
+}
+
+export async function getMemoryStats(): Promise<MemoryStats> {
+  const r = await fetch("/api/admin/memory/stats", { headers: authHeaders() });
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
+}
+
+export async function seedMemory(req: MemorySeedRequest): Promise<{ id: string; stats: MemoryStats }> {
+  const r = await fetch("/api/admin/memory/seed", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify(req),
+  });
+  if (!r.ok) throw new Error(await readError(r));
+  return r.json();
 }

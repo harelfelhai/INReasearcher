@@ -76,3 +76,35 @@ class SessionOut(BaseModel):
     exports: List[ExcelExportOut] = []
 
     model_config = {"from_attributes": True}
+
+
+# ── Memory feedback / seeding ─────────────────────────────────────────────────
+
+class CellFeedback(BaseModel):
+    entity_name: str
+    field_id: str
+    is_correct: bool
+    correct_value: Optional[str] = None
+
+
+class FeedbackRequest(BaseModel):
+    cells: List[CellFeedback]
+
+
+class MemorySeedRequest(BaseModel):
+    kind: Literal["success", "failure"]
+    field_type: str
+    field_label: str
+    entity: str
+    value: str
+    quote: str
+    source_url: str
+    source_domain: str = ""
+    reason: Optional[str] = None
+
+
+class MemoryStatsOut(BaseModel):
+    compiler_successes: int
+    extraction_successes: int
+    extraction_failures: int
+    path: str

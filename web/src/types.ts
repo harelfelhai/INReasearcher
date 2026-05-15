@@ -177,3 +177,33 @@ export interface SessionOut {
   completed_at?: string | null;
   exports: ExcelExportOut[];
 }
+
+// ── Memory / feedback ─────────────────────────────────────────────────────────
+
+export interface CellFeedback {
+  entity_name: string;
+  field_id: string;
+  is_correct: boolean;
+  correct_value?: string | null;
+}
+
+export type MemorySeedKind = "success" | "failure";
+
+export interface MemorySeedRequest {
+  kind: MemorySeedKind;
+  field_type: string;
+  field_label: string;
+  entity: string;
+  value: string;
+  quote: string;
+  source_url: string;
+  source_domain?: string;
+  reason?: string | null;
+}
+
+export interface MemoryStats {
+  compiler_successes: number;
+  extraction_successes: number;
+  extraction_failures: number;
+  path: string;
+}

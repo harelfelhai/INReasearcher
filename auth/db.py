@@ -36,3 +36,14 @@ def init_db() -> None:
     """Create all tables if they don't exist. Safe to call at startup."""
     from . import models  # noqa: F401 — ensures tables are registered
     Base.metadata.create_all(bind=engine)
+    # Idempotent migration: add results_json if this DB predates it.
+    if DATABASE_URL.startswith("sqlite"):
+        from sqlalchemy import text
+        with engine.connect() as conn:
+            try:
+                conn.execute(text(
+                    "ALTER TABLE research_sessions ADD COLUMN results_json TEXT"
+                ))
+                conn.commit()
+            except Exception:
+                pass  # column already exists

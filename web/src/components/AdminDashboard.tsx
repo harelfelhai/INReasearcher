@@ -3,11 +3,13 @@ import {
   createManagedUser,
   disableUser,
   downloadExport,
+  getMemoryStats,
   listManagedUsers,
   listUserSessions,
+  seedMemory,
   updateUserBudget,
 } from "../api";
-import type { ManagedUser, SessionOut } from "../types";
+import type { ManagedUser, MemoryStats, SessionOut } from "../types";
 
 export default function AdminDashboard() {
   const [users, setUsers] = useState<ManagedUser[]>([]);
@@ -285,6 +287,139 @@ export default function AdminDashboard() {
           </table>
         </div>
       )}
+
+      <MemorySection />
+    </div>
+  );
+}
+
+
+// ── Memory stats + manual seeding ────────────────────────────────────────────
+
+function MemorySection() {
+  const [stats, setStats] = useState<MemoryStats | null>(null);
+  const [loadErr, setLoadErr] = useState<string | null>(null);
+
+  // Seed form state
+  const [kind, setKind] = useState<"success" | "failure">("success");
+  const [fieldType, setFieldType] = useState("person_name");
+  const [fieldLabel, setFieldLabel] = useState("");
+  const [entity, setEntity] = useState("");
+  const [value, setValue] = useState("");
+  const [quote, setQuote] = useState("");
+  const [sourceUrl, setSourceUrl] = useState("");
+  const [reason, setReason] = useState("");
+  const [seeding, setSeeding] = useState(false);
+  const [seedMsg, setSeedMsg] = useState<string | null>(null);
+  const [seedErr, setSeedErr] = useState<string | null>(null);
+
+  useEffect(() => {
+    getMemoryStats().then(setStats).catch((e) => setLoadErr(e.message));
+  }, []);
+
+  async function handleSeed() {
+    if (!fieldLabel || !entity || !value || !quote || !sourceUrl) return;
+    if (kind === "failure" && !reason) return;
+    setSeeding(true);
+    setSeedMsg(null);
+    setSeedErr(null);
+    try {
+      const res = await seedMemory({ kind, field_type: fieldType, field_label: fieldLabel, entity, value, quote, source_url: sourceUrl, reason: reason || null });
+      setStats(res.stats);
+      setSeedMsg(`נשמר (id: ${res.id.slice(0, 8)}…)`);
+      setFieldLabel(""); setEntity(""); setValue(""); setQuote(""); setSourceUrl(""); setReason("");
+    } catch (e) {
+      setSeedErr((e as Error).message);
+    } finally {
+      setSeeding(false);
+    }
+  }
+
+  return (
+    <div className="bg-white border border-slate-200 rounded-xl shadow-sm p-5 space-y-4">
+      <h2 className="font-semibold text-base">זיכרון המערכת</h2>
+      {loadErr && <div className="text-xs text-rose-700">{loadErr}</div>}
+      {stats && (
+        <div className="flex gap-6 text-sm">
+          <div><span className="font-mono text-blue-700">{stats.compiler_successes}</span> תוכניות מאומתות</div>
+          <div><span className="font-mono text-emerald-700">{stats.extraction_successes}</span> חילוצים נכונים</div>
+          <div><span className="font-mono text-rose-700">{stats.extraction_failures}</span> כשלונות מסומנים</div>
+          <div className="text-slate-400 text-xs self-center">{stats.path}</div>
+        </div>
+      )}
+
+      <details>
+        <summary className="cursor-pointer text-sm font-medium text-slate-700 select-none">הוסף דוגמה ידנית</summary>
+        <div className="mt-3 space-y-3 text-sm">
+          <div className="flex gap-3 flex-wrap">
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">סוג</label>
+              <select value={kind} onChange={(e) => setKind(e.target.value as "success" | "failure")}
+                className="border border-slate-300 rounded px-2 py-1 text-sm bg-white">
+                <option value="success">נכון (דוגמה חיובית)</option>
+                <option value="failure">שגוי (אזהרה)</option>
+              </select>
+            </div>
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">סוג שדה</label>
+              <select value={fieldType} onChange={(e) => setFieldType(e.target.value)}
+                className="border border-slate-300 rounded px-2 py-1 text-sm bg-white">
+                {["person_name","url","date","number","organization","free_text"].map((t) => (
+                  <option key={t} value={t}>{t}</option>
+                ))}
+              </select>
+            </div>
+            <div className="flex-1 min-w-32">
+              <label className="block text-xs text-slate-500 mb-1">שם שדה</label>
+              <input value={fieldLabel} onChange={(e) => setFieldLabel(e.target.value)}
+                placeholder="Mayor / ראש העיר" dir="auto"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+            <div className="flex-1 min-w-32">
+              <label className="block text-xs text-slate-500 mb-1">ישות</label>
+              <input value={entity} onChange={(e) => setEntity(e.target.value)}
+                placeholder="Tel Aviv" dir="auto"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+          </div>
+          <div className="flex gap-3 flex-wrap">
+            <div className="flex-1 min-w-40">
+              <label className="block text-xs text-slate-500 mb-1">ערך</label>
+              <input value={value} onChange={(e) => setValue(e.target.value)}
+                placeholder="Ron Huldai" dir="auto"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+            <div className="flex-1 min-w-64">
+              <label className="block text-xs text-slate-500 mb-1">ציטוט מקורי (העתק-הדבק מהמקור)</label>
+              <input value={quote} onChange={(e) => setQuote(e.target.value)}
+                placeholder="Ron Huldai has served as mayor since 1998" dir="auto"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+            <div className="flex-1 min-w-48">
+              <label className="block text-xs text-slate-500 mb-1">כתובת מקור</label>
+              <input value={sourceUrl} onChange={(e) => setSourceUrl(e.target.value)}
+                placeholder="https://..." dir="ltr"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+          </div>
+          {kind === "failure" && (
+            <div>
+              <label className="block text-xs text-slate-500 mb-1">סיבת הכשל (חובה)</label>
+              <input value={reason} onChange={(e) => setReason(e.target.value)}
+                placeholder="הערך אינו מוזכר בטקסט — הלוצינציה" dir="auto"
+                className="w-full border border-slate-300 rounded px-2 py-1 text-sm" />
+            </div>
+          )}
+          {seedErr && <div className="text-xs text-rose-700">{seedErr}</div>}
+          {seedMsg && <div className="text-xs text-emerald-700">{seedMsg}</div>}
+          <div className="flex justify-end">
+            <button onClick={handleSeed} disabled={seeding}
+              className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold disabled:opacity-50">
+              {seeding ? "שומר…" : "שמור דוגמה"}
+            </button>
+          </div>
+        </div>
+      </details>
     </div>
   );
 }

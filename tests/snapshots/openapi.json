@@ -30,6 +30,40 @@
         "title": "BudgetUpdateRequest",
         "type": "object"
       },
+      "CellFeedback": {
+        "properties": {
+          "correct_value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Correct Value"
+          },
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "is_correct": {
+            "title": "Is Correct",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "entity_name",
+          "field_id",
+          "is_correct"
+        ],
+        "title": "CellFeedback",
+        "type": "object"
+      },
       "ClarificationQuestion": {
         "properties": {
           "example": {
@@ -544,6 +578,22 @@
         "title": "ExtractionStrategy",
         "type": "object"
       },
+      "FeedbackRequest": {
+        "properties": {
+          "cells": {
+            "items": {
+              "$ref": "#/components/schemas/CellFeedback"
+            },
+            "title": "Cells",
+            "type": "array"
+          }
+        },
+        "required": [
+          "cells"
+        ],
+        "title": "FeedbackRequest",
+        "type": "object"
+      },
       "FieldAuditIssue": {
         "properties": {
           "explanation_en": {
@@ -745,6 +795,97 @@
           "created_at"
         ],
         "title": "ManagedUserOut",
+        "type": "object"
+      },
+      "MemorySeedRequest": {
+        "properties": {
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "field_label": {
+            "title": "Field Label",
+            "type": "string"
+          },
+          "field_type": {
+            "title": "Field Type",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "success",
+              "failure"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "quote": {
+            "title": "Quote",
+            "type": "string"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "source_domain": {
+            "default": "",
+            "title": "Source Domain",
+            "type": "string"
+          },
+          "source_url": {
+            "title": "Source Url",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "field_type",
+          "field_label",
+          "entity",
+          "value",
+          "quote",
+          "source_url"
+        ],
+        "title": "MemorySeedRequest",
+        "type": "object"
+      },
+      "MemoryStatsOut": {
+        "properties": {
+          "compiler_successes": {
+            "title": "Compiler Successes",
+            "type": "integer"
+          },
+          "extraction_failures": {
+            "title": "Extraction Failures",
+            "type": "integer"
+          },
+          "extraction_successes": {
+            "title": "Extraction Successes",
+            "type": "integer"
+          },
+          "path": {
+            "title": "Path",
+            "type": "string"
+          }
+        },
+        "required": [
+          "compiler_successes",
+          "extraction_successes",
+          "extraction_failures",
+          "path"
+        ],
+        "title": "MemoryStatsOut",
         "type": "object"
       },
       "MockResponse": {
@@ -1071,6 +1212,112 @@
   },
   "openapi": "3.1.0",
   "paths": {
+    "/api/admin/memory/seed": {
+      "post": {
+        "description": "Manually inject a curated example into the memory store.",
+        "operationId": "api_memory_seed_api_admin_memory_seed_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemorySeedRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Memory Seed Api Admin Memory Seed Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Memory Seed"
+      }
+    },
+    "/api/admin/memory/stats": {
+      "get": {
+        "description": "Return current memory store sizes.",
+        "operationId": "api_memory_stats_api_admin_memory_stats_get",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryStatsOut"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Memory Stats"
+      }
+    },
     "/api/admin/users": {
       "get": {
         "operationId": "list_managed_users_api_admin_users_get",
@@ -1875,6 +2122,74 @@
           }
         },
         "summary": "Api Run"
+      }
+    },
+    "/api/sessions/{session_id}/feedback": {
+      "post": {
+        "description": "Record per-cell feedback for a completed session into the memory store.\n\nEach correct cell becomes a positive few-shot example for future runs of\nthe same field type. Each incorrect cell becomes a negative warning.",
+        "operationId": "api_session_feedback_api_sessions__session_id__feedback_post",
+        "parameters": [
+          {
+            "in": "path",
+            "name": "session_id",
+            "required": true,
+            "schema": {
+              "title": "Session Id",
+              "type": "string"
+            }
+          },
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FeedbackRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": true,
+                  "title": "Response Api Session Feedback Api Sessions  Session Id  Feedback Post",
+                  "type": "object"
+                }
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Session Feedback"
       }
     },
     "/api/user/exports/{export_id}": {
