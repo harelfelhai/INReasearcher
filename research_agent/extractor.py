@@ -1382,8 +1382,21 @@ def _gather_pages_for_field(
     if seen_urls is None:
         seen_urls = set()
 
-    queries_he = [q.replace("{entity}", entity) for q in field.search_queries_he]
-    queries_en = [q.replace("{entity}", entity) for q in field.search_queries_en[:2]]
+    # Strip queries that lack {entity} — they return the same page for every
+    # entity, wasting SerpAPI quota and producing duplicate content.
+    queries_he = [
+        q.replace("{entity}", entity)
+        for q in field.search_queries_he
+        if "{entity}" in q
+    ]
+    queries_en = [
+        q.replace("{entity}", entity)
+        for q in field.search_queries_en[:2]
+        if "{entity}" in q
+    ]
+    if not queries_he and not queries_en and field.search_queries_he:
+        print(f"    [search] warning: field={field.id!r} has no queries with "
+              f"{{entity}} placeholder — skipping per-entity search")
 
     if field.depends_on and field.depends_on in resolved_deps:
         dep_val = resolved_deps[field.depends_on]

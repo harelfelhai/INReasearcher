@@ -140,7 +140,20 @@ def _process_entity_sync(
         probe_hit = probe_results[field.id].get(entity)
         if not (probe_hit and probe_hit.value):
             continue
-        extras = verify_probe_extraction(field, entity, probe_hit, search, claude)
+        # Skip verify_probe when the field only needs 1 corroboration OR the
+        # probe already has very high confidence (e.g. Wikidata at 0.95).
+        # Running verify_probe for every (entity, field) pair in a 20-entity
+        # run fires up to 100 extra search + Claude calls — the primary cause
+        # of rate-limit crashes in the first production run.
+        needs_corroboration = field.min_corroborations > 1
+        high_conf = probe_hit.extractor_confidence >= 0.90
+        if needs_corroboration and not high_conf:
+            extras = verify_probe_extraction(field, entity, probe_hit, search, claude)
+        else:
+            reason = "high_confidence" if high_conf else "single_corr_ok"
+            print(f"  [probe-verify] SKIP entity={entity!r} field={field.id!r} "
+                  f"reason={reason} conf={probe_hit.extractor_confidence:.2f}")
+            extras = []
         all_extractions = [probe_hit] + extras
         cell = verify_field(field, all_extractions)
         cells[field.id] = cell
