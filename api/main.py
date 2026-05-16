@@ -549,14 +549,21 @@ def api_run(
                 yield _sse("entity_start", {"entity": entity})
                 await asyncio.sleep(0)
 
-            entity_tasks = [
-                asyncio.create_task(
-                    asyncio.to_thread(
-                        _process_entity_sync, entity, plan, probe_results, search, claude, _memory, run_tracer,
+            # Throttle concurrent entities. Each entity fires ~50 Claude
+            # batch-extract calls; running all of them at once trivially blows
+            # past the org's per-minute token rate limit. A small semaphore
+            # keeps the system within limits without sacrificing parallelism.
+            _entity_concurrency = int(os.getenv("ENTITY_CONCURRENCY", "3"))
+            _entity_sem = asyncio.Semaphore(_entity_concurrency)
+
+            async def _run_one(entity_name: str):
+                async with _entity_sem:
+                    return await asyncio.to_thread(
+                        _process_entity_sync,
+                        entity_name, plan, probe_results, search, claude, _memory, run_tracer,
                     )
-                )
-                for entity in entities
-            ]
+
+            entity_tasks = [asyncio.create_task(_run_one(entity)) for entity in entities]
 
             for finished in asyncio.as_completed(entity_tasks):
                 try:

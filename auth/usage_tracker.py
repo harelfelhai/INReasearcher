@@ -6,9 +6,13 @@ per-million-token prices.
 """
 from __future__ import annotations
 
+import random
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
+
+import anthropic
 
 
 # Approximate USD per 1M tokens. Update when Anthropic pricing changes.
@@ -58,7 +62,40 @@ class _TrackedMessages:
         self._totals = totals
 
     def create(self, **kwargs):
-        resp = self._inner.create(**kwargs)
+        # Retry on transient rate-limit / overload errors. Per-minute token
+        # limits clear within 60s, so a few backed-off retries reliably get
+        # us through. Surface the error after _MAX_RETRIES so the caller
+        # can still fail loudly on persistent quota exhaustion.
+        _MAX_RETRIES = 5
+        attempt = 0
+        while True:
+            try:
+                resp = self._inner.create(**kwargs)
+                break
+            except (anthropic.RateLimitError, anthropic.APIStatusError) as exc:
+                status = getattr(exc, "status_code", None)
+                is_retryable = isinstance(exc, anthropic.RateLimitError) or status in (429, 529, 503)
+                if not is_retryable or attempt >= _MAX_RETRIES:
+                    raise
+                # Honor Retry-After header when Anthropic provides one.
+                retry_after = None
+                resp_hdrs = getattr(getattr(exc, "response", None), "headers", None)
+                if resp_hdrs:
+                    try:
+                        retry_after = float(resp_hdrs.get("retry-after") or 0) or None
+                    except (TypeError, ValueError):
+                        retry_after = None
+                # Exponential backoff with jitter, capped at 60s, with a
+                # 15s floor on the first retry since rate-limit windows
+                # are minute-based.
+                base = retry_after if retry_after else min(60.0, 15.0 * (2 ** attempt))
+                wait = base + random.uniform(0, 2.0)
+                print(
+                    f"    [claude-retry] attempt {attempt + 1}/{_MAX_RETRIES} "
+                    f"after {type(exc).__name__} — sleeping {wait:.1f}s"
+                )
+                time.sleep(wait)
+                attempt += 1
         model = kwargs.get("model", "default")
         usage = getattr(resp, "usage", None)
         if usage is not None:
