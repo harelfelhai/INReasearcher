@@ -1396,7 +1396,7 @@ def _gather_pages_for_field(
     tr = tracer or NullTracer()
 
     is_wikipedia = isinstance(tavily, WikipediaSearchClient)
-    query_cap = 3 if is_wikipedia else 6
+    query_cap = 3 if is_wikipedia else 2
 
     if is_wikipedia:
         extra = []
@@ -1432,7 +1432,7 @@ def _gather_pages_for_field(
 
     def _one_search(q: str) -> tuple[str, list]:
         try:
-            return q, tavily.search(q, max_results=3, include_raw_content=True).get("results", [])
+            return q, tavily.search(q, max_results=5, include_raw_content=True).get("results", [])
         except Exception as exc:
             print(f"    [search error] {q[:60]!r}: {exc}")
             return q, []
