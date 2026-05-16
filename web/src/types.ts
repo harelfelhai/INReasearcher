@@ -49,6 +49,7 @@ export type IssueKind =
   | "subjective"
   | "missing_anchor"
   | "ambiguous_format"
+  | "ambiguous_scope"
   | "no_canonical_source";
 
 export interface FieldAuditIssue {

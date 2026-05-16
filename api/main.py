@@ -300,6 +300,7 @@ def _search_client(engine: SearchEngine):
 class CompileRequest(BaseModel):
     question: str
     entity_type: str = ""
+    entities: list[str] = []
 
 
 class CompileResponse(BaseModel):
@@ -349,7 +350,9 @@ def api_compile_schema(
     _user: User = Depends(get_current_user),
 ) -> CompileResponse:
     """Phase A preflight + Phase B1 bare schema."""
-    result = compile_schema(req.question, req.entity_type, _claude(), memory=_memory)
+    result = compile_schema(
+        req.question, req.entity_type, _claude(), memory=_memory, entities=req.entities
+    )
     if isinstance(result, ClarificationRequest):
         return CompileResponse(kind="clarification", clarification=result)
     return CompileResponse(kind="plan", plan=result.plan)

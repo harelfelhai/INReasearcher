@@ -186,8 +186,9 @@ export interface CompileResponse {
 export async function compileSchema(
   question: string,
   entity_type = "",
+  entities: string[] = [],
 ): Promise<CompileResponse> {
-  return postJson("/api/compile-schema", { question, entity_type });
+  return postJson("/api/compile-schema", { question, entity_type, entities });
 }
 
 export async function auditPlan(plan: ResearchPlan): Promise<FieldAuditReport> {

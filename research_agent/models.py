@@ -98,6 +98,7 @@ class FieldAuditIssue(BaseModel):
         "subjective",        # e.g. "best mayor" — no objective answer
         "missing_anchor",    # historical field with no year/period
         "ambiguous_format",  # e.g. "name" — full? nickname? first only?
+        "ambiguous_scope",   # e.g. "previous career" — one job? sector? years?
         "no_canonical_source",  # no obvious authoritative source exists
     ]
     explanation_he: str

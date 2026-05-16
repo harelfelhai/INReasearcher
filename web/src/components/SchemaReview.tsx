@@ -29,8 +29,18 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
 
   return (
     <div className="space-y-6">
-      <section className="bg-white border border-slate-200 rounded-xl shadow-sm p-5">
-        <h2 className="font-semibold mb-3">סכמה</h2>
+      <section className="bg-white border-2 border-blue-300 rounded-xl shadow-sm p-5">
+        <div className="flex items-center gap-2 mb-2">
+          <span className="bg-blue-600 text-white text-xs font-semibold px-2 py-0.5 rounded">
+            שלב 2 מתוך 3
+          </span>
+          <h2 className="font-semibold text-lg">הסכמה שתופק — טיוטה לאישור</h2>
+        </div>
+        <p className="text-sm text-slate-600 mb-3">
+          זוהי המבנה של הטבלה שהמערכת תייצר. כל שורה תייצג ישות אחת מהרשימה,
+          וכל עמודה תכיל ערך אחד שיאומת ממקור. בדוק את העמודות לפני האישור —
+          תוכל לחזור ולערוך את השאלה אם משהו חסר או לא ברור.
+        </p>
         <div className="text-sm text-slate-500 mb-3">
           סוג ישות: <span className="font-mono text-slate-900" dir="auto">{plan.entity_type}</span>
         </div>

@@ -82,13 +82,28 @@ An executable prompt must have:
   3. TEMPORAL CONTEXT — year/period if historical or time-sensitive
   4. GEOGRAPHIC / JURISDICTIONAL SCOPE
 
-If any are missing, generate bilingual clarifying questions and a
-[PLACEHOLDER]-marked prompt template.
+IMPORTANT — entity list handling:
+  - If the user prompt is accompanied by an explicit entity list (you will be
+    told the count and shown a sample), treat the ENTITY TYPE and ENTITY
+    SPECIFICATION dimensions as SATISFIED. The user has named the exact
+    entities — do NOT ask which ones, do NOT ask for a list. You may still
+    ask about TEMPORAL CONTEXT or FIELD AMBIGUITY if those are missing.
+  - Only ask "which entities?" when no list is provided.
+
+If any required dimension is missing, generate bilingual clarifying questions.
+Each question MUST be written in Hebrew in `question_he` (clear, natural Hebrew
+— do NOT leave English in the Hebrew field). The `field` value is a short
+machine code (e.g. 'timeframe', 'field_ambiguity') — the frontend maps it to a
+Hebrew label, so keep it stable.
+
+Also provide a [PLACEHOLDER]-marked prompt template the user can fill in.
 
 Examples:
   "Tell me about mayors"                              → NOT executable
   "For each Israeli municipality, find who served
-   as mayor in 1990 and the official record URL"     → executable"""
+   as mayor in 1990 and the official record URL"     → executable
+  "Find the party of these MKs" + list of 20 names    → executable
+                                                       (entities are supplied)"""
 
 
 # ── Phase B1 — Schema only (no queries) ──────────────────────────────────────
@@ -189,6 +204,7 @@ _AUDIT_TOOL = {
                                 "subjective",
                                 "missing_anchor",
                                 "ambiguous_format",
+                                "ambiguous_scope",
                                 "no_canonical_source",
                             ],
                         },
@@ -229,7 +245,19 @@ ask:
      FAIL: "name" — full? nickname? Hebrew/English?
      PASS: "full_name_hebrew", "official_website_url"
 
-  5. NO_CANONICAL_SOURCE — would a researcher know where to look?
+  5. AMBIGUOUS_SCOPE — would two researchers extract the SAME granularity?
+     Even if the answer is a single string and objective, the SEMANTIC SCOPE
+     can be ambiguous: which slice of reality does this field point at?
+     FAIL: "previous_career" — one job? a sector? years of experience?
+           "education" — highest degree? full history? institution?
+           "military_service" — unit? rank? years? role description?
+     PASS: "most_recent_job_title_before_election",
+           "highest_academic_degree",
+           "idf_unit_name"
+     Be strict here — vague nouns like "career", "background", "education",
+     "service", "experience" almost always need a sharper anchor.
+
+  6. NO_CANONICAL_SOURCE — would a researcher know where to look?
      FAIL: "personal_opinion_about_X"
      PASS: any field with a likely authoritative source
 
@@ -450,14 +478,28 @@ def run_preflight(
     research_question: str,
     entity_type: str,
     client: anthropic.Anthropic,
+    entities: list[str] | None = None,
 ) -> dict:
     """Phase A: returns raw preflight_check tool output."""
+    entities = entities or []
+    if entities:
+        sample = ", ".join(entities[:5])
+        more = f" (+{len(entities) - 5} more)" if len(entities) > 5 else ""
+        entity_block = (
+            f"Entity list provided by user: {len(entities)} items.\n"
+            f"Sample: {sample}{more}\n"
+            "→ ENTITY TYPE and ENTITY SPECIFICATION are SATISFIED. "
+            "Do NOT ask which entities to research.\n"
+        )
+    else:
+        entity_block = "No entity list provided.\n"
     return _call_tool(
         client,
         _PREFLIGHT_SYSTEM,
         _PREFLIGHT_TOOL,
         f"Research question: {research_question}\n"
-        f"Entity type hint: {entity_type or 'not specified'}\n\n"
+        f"Entity type hint: {entity_type or 'not specified'}\n"
+        f"{entity_block}\n"
         "Evaluate if this is executable.",
         max_tokens=1024,
     )
@@ -468,13 +510,14 @@ def compile_schema(
     entity_type: str,
     client: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
+    entities: list[str] | None = None,
 ) -> ClarificationRequest | ExecutableResearchPlan:
     """
     Phase A → Phase B1. Returns either:
       ClarificationRequest      — prompt failed preflight
       ExecutableResearchPlan    — bare schema (no queries yet)
     """
-    preflight = run_preflight(research_question, entity_type, client)
+    preflight = run_preflight(research_question, entity_type, client, entities=entities)
 
     if not preflight["is_executable"]:
         return ClarificationRequest(

@@ -38,16 +38,53 @@ const BAD: [string, string][] = [
   ["מי היה ראש העיר הטוב ביותר בכל עיר?", "‘הטוב ביותר’ הוא סובייקטיבי"],
 ];
 
+// Map machine-readable field codes from the preflight LLM to Hebrew labels.
+const FIELD_LABELS_HE: Record<string, string> = {
+  entity_type: "סוג ישות",
+  entity_specification: "פירוט הישויות",
+  specific_fields: "שדות לאיסוף",
+  fields: "שדות לאיסוף",
+  field_ambiguity: "עמימות בשדה",
+  temporal_context: "מסגרת זמן",
+  timeframe: "מסגרת זמן",
+  time_period: "מסגרת זמן",
+  geographic_scope: "היקף גאוגרפי",
+  jurisdiction: "תחום שיפוט",
+  scope: "היקף",
+  data_completeness_expectation: "ציפיית שלמות נתונים",
+  data_completeness: "ציפיית שלמות נתונים",
+};
+
+function fieldLabelHe(field: string): string {
+  const key = field.toLowerCase().replace(/[\s-]+/g, "_");
+  return FIELD_LABELS_HE[key] ?? field;
+}
+
 export default function Setup(props: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Per-question answers for the clarification panel, keyed by question field.
+  const [answers, setAnswers] = useState<Record<string, string>>({});
+
+  function parsedEntities(): string[] {
+    if (props.autoDiscover) return [];
+    return props.entitiesText
+      .split("\n")
+      .map((s) => s.trim())
+      .filter(Boolean);
+  }
 
   async function build() {
     setLoading(true);
     setError(null);
     try {
-      const compiled = await compileSchema(props.question, props.entityType);
+      const compiled = await compileSchema(
+        props.question,
+        props.entityType,
+        parsedEntities(),
+      );
       if (compiled.kind === "clarification") {
+        setAnswers({});
         props.onCompiled(null, null, [], compiled.clarification ?? null);
         return;
       }
@@ -172,21 +209,99 @@ export default function Setup(props: Props) {
         </div>
 
         {props.clarification && (
-          <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm">
-            <div className="font-medium text-amber-900 mb-1">נדרשת הבהרה</div>
-            <div className="text-amber-900 mb-2">{props.clarification.reason}</div>
-            <ul className="list-disc list-inside text-amber-900 space-y-1">
+          <div className="bg-amber-50 border border-amber-200 rounded p-3 text-sm space-y-3">
+            <div>
+              <div className="font-medium text-amber-900 mb-1">נדרשת הבהרה</div>
+              <div className="text-amber-900">{props.clarification.reason}</div>
+            </div>
+
+            <div className="space-y-2">
               {props.clarification.questions.map((q) => (
-                <li key={q.field}>
-                  <span className="font-mono">[{q.field}]</span> {q.question_he}{" "}
-                  <span className="text-amber-700">(דוגמה: {q.example})</span>
-                </li>
+                <div key={q.field} className="bg-white border border-amber-200 rounded p-2">
+                  <label className="block text-amber-900 mb-1">
+                    <span className="inline-block bg-amber-200 text-amber-900 rounded px-1.5 py-0.5 text-xs ml-2">
+                      {fieldLabelHe(q.field)}
+                    </span>
+                    {q.question_he}
+                  </label>
+                  <div className="text-xs text-amber-700 mb-1.5" dir="auto">
+                    דוגמה: {q.example}
+                  </div>
+                  <input
+                    className="w-full border border-amber-300 rounded p-1.5 text-sm bg-white"
+                    placeholder={q.example}
+                    value={answers[q.field] ?? ""}
+                    onChange={(e) =>
+                      setAnswers({ ...answers, [q.field]: e.target.value })
+                    }
+                    dir="auto"
+                  />
+                </div>
               ))}
-            </ul>
+            </div>
+
+            <div className="flex justify-end">
+              <button
+                type="button"
+                className="bg-amber-600 hover:bg-amber-700 text-white px-3 py-1.5 rounded text-xs font-semibold disabled:opacity-50"
+                disabled={
+                  props.clarification.questions.length === 0 ||
+                  props.clarification.questions.every((q) => !(answers[q.field] ?? "").trim())
+                }
+                onClick={() => {
+                  const tpl = props.clarification?.prompt_template ?? "";
+                  let nextQuestion = tpl || props.question;
+                  for (const q of props.clarification?.questions ?? []) {
+                    const ans = (answers[q.field] ?? "").trim();
+                    if (!ans) continue;
+                    // Replace [PLACEHOLDER: …] markers tied to this field, or
+                    // any [PLACEHOLDER …] if we can't disambiguate.
+                    const fieldRe = new RegExp(
+                      `\\[PLACEHOLDER[^\\]]*${q.field}[^\\]]*\\]`,
+                      "gi",
+                    );
+                    if (fieldRe.test(nextQuestion)) {
+                      nextQuestion = nextQuestion.replace(fieldRe, ans);
+                    } else {
+                      // Fallback: replace the first remaining [PLACEHOLDER …].
+                      nextQuestion = nextQuestion.replace(/\[PLACEHOLDER[^\]]*\]/i, ans);
+                    }
+                  }
+                  // Any leftover placeholders → append answers as a clarifying suffix.
+                  const leftover = /\[PLACEHOLDER[^\]]*\]/i.test(nextQuestion);
+                  if (!tpl || leftover) {
+                    const suffix = (props.clarification?.questions ?? [])
+                      .map((q) => {
+                        const a = (answers[q.field] ?? "").trim();
+                        return a ? `${fieldLabelHe(q.field)}: ${a}` : null;
+                      })
+                      .filter(Boolean)
+                      .join("; ");
+                    if (suffix) {
+                      nextQuestion = nextQuestion.replace(/\[PLACEHOLDER[^\]]*\]/gi, "").trim();
+                      nextQuestion = `${nextQuestion}\n(${suffix})`;
+                    }
+                  }
+                  props.setQuestion(nextQuestion);
+                  // Reset the clarification panel so the user can re-submit.
+                  props.onCompiled(null, null, [], null);
+                  setAnswers({});
+                }}
+              >
+                החל תשובות על השאלה
+              </button>
+            </div>
+
             {props.clarification.prompt_template && (
-              <pre className="mt-2 bg-white border border-amber-200 rounded p-2 text-xs whitespace-pre-wrap" dir="auto">
-                {props.clarification.prompt_template}
-              </pre>
+              <details className="text-xs text-amber-800">
+                <summary className="cursor-pointer">תבנית מוצעת (לעריכה ידנית)</summary>
+                <pre
+                  className="mt-2 bg-white border border-amber-200 rounded p-2 whitespace-pre-wrap"
+                  dir="auto"
+                >
+                  {props.clarification.prompt_template}
+                </pre>
+              </details>
             )}
           </div>
         )}
