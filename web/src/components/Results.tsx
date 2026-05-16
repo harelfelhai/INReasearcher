@@ -1,6 +1,15 @@
 import { useEffect, useRef, useState } from "react";
-import { downloadExport, runResearch, submitFeedback, type RunDonePayload, type SeededProbe } from "../api";
-import type { CellFeedback, EntityResult, ResearchPlan, SearchEngine } from "../types";
+import {
+  deepenResearch,
+  downloadExport,
+  runResearch,
+  submitFeedback,
+  type DeepenDonePayload,
+  type DeepenMissingCell,
+  type RunDonePayload,
+  type SeededProbe,
+} from "../api";
+import type { CellFeedback, EntityResult, ResearchPlan, SearchEngine, VerifiedCell } from "../types";
 
 interface Props {
   plan: ResearchPlan;
@@ -174,6 +183,11 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
   const [doneInfo, setDoneInfo] = useState<RunDonePayload | null>(null);
   const ctrlRef = useRef<AbortController | null>(null);
 
+  // Deep-retry state
+  const [deepenStatus, setDeepenStatus] = useState<"idle" | "running" | "done">("idle");
+  const [deepenInfo, setDeepenInfo] = useState<DeepenDonePayload | null>(null);
+  const deepenCtrlRef = useRef<AbortController | null>(null);
+
   useEffect(() => {
     ctrlRef.current = runResearch(plan, entities, searchEngine, {
       onEntityStart: (e) => setCurrent(e),
@@ -184,6 +198,37 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
     return () => ctrlRef.current?.abort();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  function missingCells(): DeepenMissingCell[] {
+    const missing: DeepenMissingCell[] = [];
+    for (const r of results) {
+      for (const c of plan.columns) {
+        if (!r.cells[c.id]?.value) {
+          missing.push({ entity: r.entity_name, field_id: c.id });
+        }
+      }
+    }
+    return missing;
+  }
+
+  function startDeepen() {
+    const missing = missingCells();
+    if (missing.length === 0 || deepenStatus !== "idle") return;
+    setDeepenStatus("running");
+    deepenCtrlRef.current = deepenResearch(plan, missing, searchEngine, {
+      onEntityDeeped: (entity, newCells) => {
+        setResults((prev) =>
+          prev.map((r) =>
+            r.entity_name === entity
+              ? { ...r, cells: { ...r.cells, ...(newCells as Record<string, VerifiedCell>) } }
+              : r,
+          ),
+        );
+      },
+      onDone: (info) => { setDeepenStatus("done"); setDeepenInfo(info); },
+      onError: (msg) => { setDeepenStatus("done"); setErrorMsg(msg); },
+    });
+  }
 
   function downloadCsv() {
     const headers = ["entity", ...plan.columns.map((c) => c.id), "flags"];
@@ -246,6 +291,34 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
           </button>
         </div>
       </div>
+
+      {/* Deepen-search banner — shown after run completes if any cells are missing */}
+      {status === "done" && deepenStatus === "idle" && missingCells().length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-xl p-4 flex items-center justify-between gap-4">
+          <div className="text-sm text-amber-800">
+            <span className="font-semibold">{missingCells().length} שדות לא נמצאו</span>
+            {" — "}חיפוש מעמיק ינסה מחדש רק את השדות החסרים עם תוצאות נוספות.
+          </div>
+          <button
+            onClick={startDeepen}
+            className="shrink-0 bg-amber-600 hover:bg-amber-700 text-white px-4 py-1.5 rounded-lg text-sm font-semibold"
+          >
+            חפש לעמוק יותר
+          </button>
+        </div>
+      )}
+      {deepenStatus === "running" && (
+        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 text-sm text-blue-800 flex items-center gap-2">
+          <span className="inline-block w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
+          מחפש לעמוק יותר בשדות החסרים…
+        </div>
+      )}
+      {deepenStatus === "done" && deepenInfo && (
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-800">
+          ✓ חיפוש מעמיק הסתיים — נמצאו <span className="font-semibold">{deepenInfo.cells_found}</span> שדות נוספים
+          {" ("}עלות: <span className="font-mono">${deepenInfo.cost_usd.toFixed(4)}</span>{")"}
+        </div>
+      )}
 
       <div className="bg-white border border-slate-200 rounded-xl shadow-sm overflow-x-auto">
         <table className="text-sm w-full">

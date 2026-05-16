@@ -305,6 +305,84 @@ export function runResearch(
   return ctrl;
 }
 
+// ── Deep-retry ───────────────────────────────────────────────────────────────
+
+export interface DeepenMissingCell {
+  entity: string;
+  field_id: string;
+}
+
+export interface DeepenDonePayload {
+  entities_searched: number;
+  cells_found: number;
+  cost_usd: number;
+}
+
+export interface DeepenEvents {
+  onEntityDeeped?: (entity: string, newCells: Record<string, import("./types").VerifiedCell>) => void;
+  onDone?: (info: DeepenDonePayload) => void;
+  onError?: (msg: string) => void;
+}
+
+export function deepenResearch(
+  plan: ResearchPlan,
+  missing: DeepenMissingCell[],
+  search_engine: SearchEngine,
+  events: DeepenEvents,
+): AbortController {
+  const ctrl = new AbortController();
+
+  (async () => {
+    try {
+      const r = await fetch("/api/deepen", {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ plan, missing, search_engine }),
+        signal: ctrl.signal,
+      });
+      if (!r.ok || !r.body) throw new Error(await readError(r));
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true });
+
+        const parts = buffer.split("\n\n");
+        buffer = parts.pop() || "";
+
+        for (const block of parts) {
+          let eventName = "message";
+          let data = "";
+          for (const line of block.split("\n")) {
+            if (line.startsWith("event: ")) eventName = line.slice(7).trim();
+            else if (line.startsWith("data: ")) data += line.slice(6);
+          }
+          if (!data) continue;
+          const payload = JSON.parse(data);
+
+          if (eventName === "deepen_entity_done")
+            events.onEntityDeeped?.(payload.entity, payload.new_cells);
+          else if (eventName === "deepen_done")
+            events.onDone?.(payload as DeepenDonePayload);
+          else if (eventName === "error")
+            events.onError?.(payload.message);
+        }
+      }
+    } catch (e) {
+      if ((e as Error).name !== "AbortError") {
+        events.onError?.((e as Error).message);
+      }
+    }
+  })();
+
+  return ctrl;
+}
+
+
 // ── Memory feedback + seeding ─────────────────────────────────────────────────
 
 export async function submitFeedback(

@@ -21,6 +21,7 @@ Cost control levers:
 
 import io
 import re
+import time
 import urllib.request
 import anthropic
 from concurrent.futures import ThreadPoolExecutor
@@ -1366,6 +1367,9 @@ def _gather_pages_for_field(
     tavily: TavilyClient,
     seen_urls: set[str] | None = None,
     tracer=None,
+    search_counter: list[int] | None = None,
+    search_budget: int | None = None,
+    max_results: int = 5,
 ) -> tuple[list[tuple[str, str, str | None]], list[ExtractionResult]]:
     """Returns (pages, wikidata_results) where each page is (url, content, date)."""
     """
@@ -1434,6 +1438,19 @@ def _gather_pages_for_field(
     # Fan out all search queries concurrently — each is independent I/O.
     all_queries = list((queries_he + queries_en)[:query_cap])
 
+    # Trim to remaining per-entity search budget so early entities don't
+    # consume all SerpAPI quota before later entities get a turn.
+    if search_budget is not None and search_counter is not None:
+        remaining = search_budget - search_counter[0]
+        if remaining <= 0:
+            print(f"    [budget] entity={entity!r} field={field.id!r}: "
+                  f"budget exhausted ({search_budget} calls) — skipping")
+            all_queries = []
+        elif len(all_queries) > remaining:
+            print(f"    [budget] entity={entity!r} field={field.id!r}: "
+                  f"trimming to {remaining} query/ies (budget={search_budget})")
+            all_queries = all_queries[:remaining]
+
     tr.emit(
         "field_search",
         entity=entity,
@@ -1444,17 +1461,32 @@ def _gather_pages_for_field(
     )
 
     def _one_search(q: str) -> tuple[str, list]:
-        try:
-            return q, tavily.search(q, max_results=5, include_raw_content=True).get("results", [])
-        except Exception as exc:
-            print(f"    [search error] {q[:60]!r}: {exc}")
-            return q, []
+        _MAX_RETRIES = 2
+        for attempt in range(_MAX_RETRIES + 1):
+            try:
+                return q, tavily.search(
+                    q, max_results=max_results, include_raw_content=True,
+                ).get("results", [])
+            except Exception as exc:
+                if attempt < _MAX_RETRIES:
+                    wait = 2.0 * (attempt + 1)
+                    print(f"    [search-retry] attempt {attempt+1}/{_MAX_RETRIES+1} "
+                          f"{q[:50]!r}: {exc} — retry in {wait:.0f}s")
+                    time.sleep(wait)
+                else:
+                    print(f"    [search error] {q[:60]!r}: {exc}")
+                    return q, []
+        return q, []   # unreachable but satisfies type checker
 
     if all_queries:
         with ThreadPoolExecutor(max_workers=min(len(all_queries), 4)) as pool:
             query_results = list(pool.map(_one_search, all_queries))
     else:
         query_results = []
+
+    # Track search calls consumed for budget accounting.
+    if search_counter is not None:
+        search_counter[0] += len(all_queries)
 
     for query, hits in query_results:
         if hits:
@@ -1540,6 +1572,8 @@ def search_and_extract_batched(
     claude: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
     tracer=None,
+    max_results: int = 5,
+    search_budget: int | None = None,
 ) -> dict[str, list[ExtractionResult]]:
     """
     Process MULTIPLE fields for one entity with cross-field page deduplication.
@@ -1561,12 +1595,16 @@ def search_and_extract_batched(
     results: dict[str, list[ExtractionResult]] = {f.id: [] for f in fields}
 
     # Phase 1 — gather pages per field. SHARED seen_urls avoids re-fetching
-    # the same URL across fields' search phases.
+    # the same URL across fields' search phases. A shared counter enforces a
+    # per-entity search budget so early entities can't starve later ones.
     shared_seen: set[str] = set()
+    entity_search_count: list[int] = [0]
     all_urls_with_content: dict[str, tuple[str, str | None]] = {}
     for field in fields:
         pages, wikidata_results = _gather_pages_for_field(
             field, entity, resolved_deps, tavily, seen_urls=shared_seen, tracer=tracer,
+            search_counter=entity_search_count, search_budget=search_budget,
+            max_results=max_results,
         )
         results[field.id].extend(wikidata_results)
         for url, content, pub_date in pages:

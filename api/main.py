@@ -243,6 +243,37 @@ def _process_entity_sync(
     return entity, cells, row_flags
 
 
+def _deepen_entity_sync(
+    entity: str,
+    fields: list,
+    search,
+    claude,
+    tracer=None,
+) -> tuple[str, dict]:
+    """
+    Deeper targeted search for missing cells of one entity.
+
+    Uses higher max_results (8 vs 5) and a larger per-entity search budget
+    (16 vs 10). Called from a thread pool inside /api/deepen.
+
+    Returns (entity_name, {field_id → VerifiedCell}) with only newly found cells.
+    """
+    batched = search_and_extract_batched(
+        fields=fields, entity=entity,
+        resolved_deps={}, tavily=search, claude=claude,
+        tracer=tracer or NullTracer(),
+        max_results=8, search_budget=16,
+    )
+    new_cells: dict = {}
+    for f in fields:
+        extractions = batched.get(f.id, [])
+        if extractions:
+            cell = verify_field(f, extractions)
+            if cell.value:
+                new_cells[f.id] = cell
+    return entity, new_cells
+
+
 # ── Error translation ────────────────────────────────────────────────────────
 
 def _translate(exc: Exception) -> tuple[int, str]:
@@ -347,6 +378,17 @@ class DiscoverPlanRequest(BaseModel):
 class DiscoverRunRequest(BaseModel):
     plan: ResearchPlan
     discovery: EntityDiscoveryPlan
+    search_engine: SearchEngine = "serpapi"
+
+
+class DeepenMissingCell(BaseModel):
+    entity: str
+    field_id: str
+
+
+class DeepenRequest(BaseModel):
+    plan: ResearchPlan
+    missing: list[DeepenMissingCell]
     search_engine: SearchEngine = "serpapi"
 
 
@@ -661,6 +703,81 @@ def api_run(
             "tokens_out": claude.totals.output_tokens,
             "export": export_payload,
             "trace_path": str(run_tracer.path),
+        })
+
+    return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ── Deep-retry: targeted second-pass search for NOT_FOUND cells ──────────────
+
+@app.post("/api/deepen")
+async def api_deepen(
+    req: DeepenRequest,
+    user: User = Depends(get_current_user),
+):
+    """
+    Targeted second-pass search for cells that came back NOT_FOUND in a run.
+
+    For each missing (entity, field_id) pair, re-searches with higher result
+    counts (8 vs 5) and a larger per-entity budget (16 calls vs 10).
+    Streams `deepen_entity_done` events as entities finish; the frontend
+    merges new cells into the existing results table without a full reload.
+    """
+    plan = req.plan
+    search = _search_client(req.search_engine)
+    raw_claude = _claude()
+    claude = TrackedAnthropic(raw_claude)
+
+    def _sse(event: str, payload: dict) -> str:
+        return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    missing_by_entity: dict[str, list[str]] = {}
+    for m in req.missing:
+        missing_by_entity.setdefault(m.entity, []).append(m.field_id)
+
+    field_by_id = {c.id: c for c in plan.columns}
+
+    async def stream():
+        entities_with_fields = [
+            (entity, [field_by_id[fid] for fid in fids if fid in field_by_id])
+            for entity, fids in missing_by_entity.items()
+        ]
+        entities_with_fields = [(e, fs) for e, fs in entities_with_fields if fs]
+
+        _sem = asyncio.Semaphore(int(os.getenv("ENTITY_CONCURRENCY", "3")))
+        found_total = 0
+
+        async def _one(entity: str, fields: list):
+            async with _sem:
+                return await asyncio.to_thread(
+                    _deepen_entity_sync, entity, fields, search, claude, NullTracer(),
+                )
+
+        tasks = [asyncio.create_task(_one(e, fs)) for e, fs in entities_with_fields]
+
+        for finished in asyncio.as_completed(tasks):
+            try:
+                entity_name, new_cells = await finished
+            except Exception as exc:
+                _, detail = _translate(exc)
+                yield _sse("error", {"message": detail})
+                continue
+
+            if new_cells:
+                found_total += len(new_cells)
+                yield _sse("deepen_entity_done", {
+                    "entity": entity_name,
+                    "new_cells": {
+                        fid: cell.model_dump()
+                        for fid, cell in new_cells.items()
+                    },
+                })
+            await asyncio.sleep(0)
+
+        yield _sse("deepen_done", {
+            "entities_searched": len(entities_with_fields),
+            "cells_found": found_total,
+            "cost_usd": claude.totals.cost_usd,
         })
 
     return StreamingResponse(stream(), media_type="text/event-stream")
