@@ -1405,7 +1405,11 @@ def _gather_pages_for_field(
     if field.depends_on and field.depends_on in resolved_deps:
         dep_val = resolved_deps[field.depends_on]
         if dep_val:
-            bonus = [q.replace("{entity}", dep_val) for q in field.search_queries_he[:2]]
+            bonus = [
+                q.replace("{entity}", dep_val)
+                for q in field.search_queries_he[:2]
+                if "{entity}" in q
+            ]
             queries_he = queries_he + bonus
 
     pages: list[tuple[str, str, str | None]] = []

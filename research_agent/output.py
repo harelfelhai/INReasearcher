@@ -19,12 +19,8 @@ import sys
 from .models import EntityResult, VerifiedCell, ColumnPlan
 
 
-def write_xlsx(
-    results: list[EntityResult],
-    output_path: str,
-    plan_columns: list[ColumnPlan],
-) -> None:
-    """Write results to a native .xlsx file (no BOM hacks, Hebrew-safe)."""
+def _build_xlsx_workbook(results: list[EntityResult], plan_columns: list[ColumnPlan]):
+    """Build and return an openpyxl Workbook for the given results."""
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
 
@@ -64,6 +60,25 @@ def write_xlsx(
         max_len = max((len(str(c.value)) if c.value else 0) for c in column_cells)
         ws.column_dimensions[column_cells[0].column_letter].width = min(max_len + 4, 60)
 
+    return wb
+
+
+def build_xlsx_bytes(results: list[EntityResult], plan_columns: list[ColumnPlan]) -> bytes:
+    """Build an xlsx workbook and return its raw bytes (for streaming HTTP responses)."""
+    import io as _io
+    wb = _build_xlsx_workbook(results, plan_columns)
+    buf = _io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def write_xlsx(
+    results: list[EntityResult],
+    output_path: str,
+    plan_columns: list[ColumnPlan],
+) -> None:
+    """Write results to a native .xlsx file (no BOM hacks, Hebrew-safe)."""
+    wb = _build_xlsx_workbook(results, plan_columns)
     wb.save(output_path)
     _log(f"XLSX → {output_path} ({len(results)} rows)")
 

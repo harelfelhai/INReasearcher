@@ -383,6 +383,25 @@ export function deepenResearch(
 }
 
 
+// ── On-demand export (includes deepened cells) ───────────────────────────────
+
+export async function exportToExcel(plan: ResearchPlan, results: EntityResult[]): Promise<void> {
+  const r = await fetch("/api/export", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({ plan, results }),
+  });
+  if (!r.ok) throw new Error(await readError(r));
+  const blob = await r.blob();
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "results_updated.xlsx";
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+}
+
+
 // ── Memory feedback + seeding ─────────────────────────────────────────────────
 
 export async function submitFeedback(

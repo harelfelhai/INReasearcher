@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import {
   deepenResearch,
   downloadExport,
+  exportToExcel,
   runResearch,
   submitFeedback,
   type DeepenDonePayload,
@@ -314,9 +315,18 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
         </div>
       )}
       {deepenStatus === "done" && deepenInfo && (
-        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-800">
-          ✓ חיפוש מעמיק הסתיים — נמצאו <span className="font-semibold">{deepenInfo.cells_found}</span> שדות נוספים
-          {" ("}עלות: <span className="font-mono">${deepenInfo.cost_usd.toFixed(4)}</span>{")"}
+        <div className="bg-emerald-50 border border-emerald-200 rounded-xl p-3 text-sm text-emerald-800 flex items-center justify-between gap-4">
+          <span>
+            ✓ חיפוש מעמיק הסתיים — נמצאו{" "}
+            <span className="font-semibold">{deepenInfo.cells_found}</span> שדות נוספים
+            {" · "}עלות: <span className="font-mono">${deepenInfo.cost_usd.toFixed(4)}</span>
+          </span>
+          <button
+            onClick={() => exportToExcel(plan, results)}
+            className="shrink-0 bg-emerald-700 hover:bg-emerald-800 text-white px-3 py-1 rounded-lg text-xs font-semibold"
+          >
+            הורד Excel מעודכן
+          </button>
         </div>
       )}
 

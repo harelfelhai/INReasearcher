@@ -69,7 +69,7 @@ from research_agent.models import (
     FieldAuditReport,
     MockRow,
 )
-from research_agent.output import write_xlsx
+from research_agent.output import write_xlsx, build_xlsx_bytes
 
 from auth import crud
 from auth.db import SessionLocal, get_db, init_db
@@ -781,6 +781,35 @@ async def api_deepen(
         })
 
     return StreamingResponse(stream(), media_type="text/event-stream")
+
+
+# ── On-demand Excel export (includes deepened cells) ─────────────────────────
+
+class ExportRequest(BaseModel):
+    plan: ResearchPlan
+    results: list[EntityResult]
+
+
+@app.post("/api/export")
+async def api_export(
+    req: ExportRequest,
+    user: User = Depends(get_current_user),
+):
+    """
+    Generate a fresh Excel file from the caller's current results.
+
+    The frontend calls this after a deep-retry completes, when the original
+    server-side export no longer reflects the updated table. Takes the full
+    results (including any deepened cells) and returns xlsx bytes directly.
+    No DB record is created — the file is returned inline.
+    """
+    from fastapi.responses import Response
+    data = build_xlsx_bytes(req.results, req.plan.columns)
+    return Response(
+        content=data,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="results_updated.xlsx"'},
+    )
 
 
 # ── Memory: post-run cell feedback ───────────────────────────────────────────
