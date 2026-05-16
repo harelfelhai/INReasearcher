@@ -603,7 +603,15 @@ def generate_mock_rows(
         "Generate 2-3 mock rows.",
         max_tokens=1200,
     )
-    return [MockRow(**r) for r in data.get("rows", [])]
+    rows = []
+    for r in data.get("rows", []):
+        if not isinstance(r, dict):
+            continue
+        try:
+            rows.append(MockRow(**r))
+        except (TypeError, ValueError):
+            continue
+    return rows
 
 
 def enrich_with_queries(
