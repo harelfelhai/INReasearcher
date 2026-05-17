@@ -1441,7 +1441,7 @@ def _gather_pages_for_field(
     tr = tracer or NullTracer()
 
     is_wikipedia = isinstance(tavily, WikipediaSearchClient)
-    query_cap = 3 if is_wikipedia else 2
+    query_cap = 3 if is_wikipedia else 1
 
     if is_wikipedia:
         extra = []
@@ -1464,7 +1464,14 @@ def _gather_pages_for_field(
                     pages.append((url, content, _extract_source_date(hit, content)))
 
     # Fan out all search queries concurrently — each is independent I/O.
-    all_queries = list((queries_he + queries_en)[:query_cap])
+    # SerpAPI path: Hebrew-only. For deferred fields the bonus dep-resolution
+    # query is appended to queries_he — allow cap=2 so it is not discarded.
+    # Wikipedia path: He+En up to cap.
+    if is_wikipedia:
+        all_queries = list((queries_he + queries_en)[:query_cap])
+    else:
+        serp_cap = 2 if (field.depends_on and len(queries_he) > 1) else query_cap
+        all_queries = list(queries_he[:serp_cap])
 
     # Trim to remaining per-entity search budget so early entities don't
     # consume all SerpAPI quota before later entities get a turn.
