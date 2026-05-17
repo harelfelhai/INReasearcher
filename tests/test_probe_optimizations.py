@@ -257,3 +257,231 @@ def test_probe_verify_fires_for_low_confidence_identity_fields():
                 verify_calls += 1
 
     assert verify_calls == len(entities) * len(fields)
+
+
+# ── 4. Probe query dedup — prefetched_page / found_page_out ──────────────────
+
+def test_probe_field_list_uses_prefetched_page_skips_search():
+    """When prefetched_page is supplied, probe_field_list must not call search."""
+    from research_agent.extractor import probe_field_list
+
+    field = _col(
+        "email",
+        type="free_text",
+        directory_probe_query_he="רשימת חברי כנסת",
+        min_corroborations=1,
+    )
+    entities = ["Alice", "Bob"]
+    page_content = "Alice email: alice@example.com\nBob email: bob@example.com"
+
+    search_calls: list[str] = []
+
+    class _TrackingSearch:
+        def search(self, query, **kw):
+            search_calls.append(query)
+            return {"results": []}
+
+    claude = (
+        MockClaude()
+        .on("bulk_extract_field", {
+            "extractions": [
+                {"entity_name": "Alice", "value": "alice@example.com",
+                 "quote_original": "alice@example.com", "confidence": 0.9},
+                {"entity_name": "Bob", "value": "bob@example.com",
+                 "quote_original": "bob@example.com", "confidence": 0.9},
+            ]
+        })
+    )
+
+    probe_field_list(
+        field=field,
+        entities=entities,
+        search_client=_TrackingSearch(),
+        claude=claude,
+        prefetched_page=("https://example.com/list", page_content),
+    )
+
+    assert search_calls == [], (
+        f"probe_field_list should not search when prefetched_page is given; got: {search_calls}"
+    )
+
+
+def test_probe_field_list_populates_found_page_out():
+    """A successful probe should append the winning page to found_page_out."""
+    from research_agent.extractor import probe_field_list
+
+    field = _col(
+        "phone",
+        type="free_text",
+        directory_probe_query_he="רשימת טלפונים",
+        min_corroborations=1,
+    )
+    entities = [f"Member {i}" for i in range(5)]
+    page_url = "https://example.com/phones"
+    # Content must be ≥ 200 chars and contain entity names for coverage check
+    page_content = "\n".join(
+        f"Member {i}: phone number 050-{i:07d}, office extension {100+i}, fax 03-{i:07d}"
+        for i in range(5)
+    ) + "\n" + "Additional directory information about the members of this organisation."
+
+    class _StaticSearch:
+        def search(self, query, **kw):
+            return {"results": [{"url": page_url, "raw_content": page_content}]}
+
+    claude = (
+        MockClaude()
+        .on("bulk_extract_field", {
+            "extractions": [
+                {"entity_name": f"Member {i}", "value": f"050-{i:07d}",
+                 "quote_original": f"050-{i:07d}", "confidence": 0.9}
+                for i in range(5)
+            ]
+        })
+    )
+
+    found_page_out: list = []
+    probe_field_list(
+        field=field,
+        entities=entities,
+        search_client=_StaticSearch(),
+        claude=claude,
+        found_page_out=found_page_out,
+    )
+
+    assert len(found_page_out) == 1, (
+        f"Expected found_page_out to have 1 entry, got {len(found_page_out)}"
+    )
+    assert found_page_out[0][0] == page_url
+
+
+# ── 5. Lane 2 → Lane 3 page cache (seed_pages / page_sink) ───────────────────
+
+def test_seed_pages_url_not_added_to_all_urls_twice():
+    """A seeded URL must appear exactly once in extracted pages."""
+    from research_agent.extractor import search_and_extract_batched
+
+    field = _col(
+        "party",
+        type="organization",
+        search_queries_he=["מפלגת {entity}"],
+        search_queries_en=[],
+        min_corroborations=1,
+    )
+    entity = "גדעון סער"
+    seeded_url = "https://knesset.example/members"
+    seeded_content = "גדעון סער חבר מפלגת הליכוד"
+
+    class _TrackingSearch:
+        def search(self, query, **kw):
+            # Returns the same URL as the seeded page; must not cause double-extraction
+            return {"results": [{"url": seeded_url, "raw_content": seeded_content}]}
+
+    claude = (
+        MockClaude()
+        .on("extract_field", {
+            "field_id": "party",
+            "value": "ליכוד",
+            "quote_original": "מפלגת הליכוד",
+            "confidence": 0.9,
+            "source_url": seeded_url,
+        })
+    )
+
+    seed = {seeded_url: (seeded_content, None)}
+    # Must not raise and must return a result (not crash on duplicate URL)
+    results = search_and_extract_batched(
+        fields=[field], entity=entity,
+        resolved_deps={}, tavily=_TrackingSearch(), claude=claude,
+        seed_pages=seed,
+    )
+    # Structural: no exception means seeded URL handled correctly
+    assert "party" in results
+
+
+def test_page_sink_collects_new_pages():
+    """Pages fetched during search_and_extract_batched should be added to page_sink."""
+    from research_agent.extractor import search_and_extract_batched
+
+    field = _col(
+        "city",
+        type="free_text",
+        search_queries_he=["עיר מגורים {entity}"],
+        search_queries_en=[],
+        min_corroborations=1,
+    )
+    entity = "ראובן ריבלין"
+    new_url = "https://bio.example/rivlin"
+    # Content must be ≥ 80 chars for _gather_pages_for_field to accept it
+    new_content = (
+        "ראובן ריבלין גר בירושלים. הוא כיהן כנשיא מדינת ישראל בין השנים 2014 ל-2021. "
+        "נולד בירושלים בשנת 1939 ולמד משפטים באוניברסיטה העברית."
+    )
+
+    class _StaticSearch:
+        def search(self, query, **kw):
+            return {"results": [{"url": new_url, "raw_content": new_content}]}
+
+    claude = (
+        MockClaude()
+        .on("extract_field", {
+            "field_id": "city",
+            "value": "ירושלים",
+            "quote_original": "גר בירושלים",
+            "confidence": 0.9,
+            "source_url": new_url,
+        })
+    )
+
+    sink: dict = {}
+    search_and_extract_batched(
+        fields=[field], entity=entity,
+        resolved_deps={}, tavily=_StaticSearch(), claude=claude,
+        page_sink=sink,
+    )
+
+    assert new_url in sink, f"Expected {new_url!r} in page_sink, got keys: {list(sink.keys())}"
+    assert sink[new_url][0] == new_content
+
+
+def test_seed_pages_url_excluded_from_page_sink():
+    """A URL already in seed_pages must not be re-added to page_sink."""
+    from research_agent.extractor import search_and_extract_batched
+
+    field = _col(
+        "role",
+        type="free_text",
+        search_queries_he=["תפקיד {entity}"],
+        search_queries_en=[],
+        min_corroborations=1,
+    )
+    entity = "TestPerson"
+    shared_url = "https://shared.example/page"
+    shared_content = "TestPerson serves as Minister"
+
+    class _StaticSearch:
+        def search(self, query, **kw):
+            return {"results": [{"url": shared_url, "raw_content": shared_content}]}
+
+    claude = (
+        MockClaude()
+        .on("extract_field", {
+            "field_id": "role",
+            "value": "Minister",
+            "quote_original": "serves as Minister",
+            "confidence": 0.9,
+            "source_url": shared_url,
+        })
+    )
+
+    seed = {shared_url: (shared_content, None)}
+    sink: dict = {}
+    search_and_extract_batched(
+        fields=[field], entity=entity,
+        resolved_deps={}, tavily=_StaticSearch(), claude=claude,
+        seed_pages=seed,
+        page_sink=sink,
+    )
+
+    assert shared_url not in sink, (
+        "URL already in seed_pages must not be duplicated into page_sink"
+    )

@@ -857,6 +857,8 @@ def probe_field_list(
     search_client,
     claude: anthropic.Anthropic,
     min_coverage: float = _MIN_PROBE_COVERAGE,
+    prefetched_page: tuple[str, str] | None = None,
+    found_page_out: list | None = None,
 ) -> dict[str, ExtractionResult] | None:
     """
     Try to find a directory/list page covering `field` for many entities at once.
@@ -867,11 +869,31 @@ def probe_field_list(
 
     Cost savings: replaces N search calls + N Claude extraction calls with
     1 search call + 1 Claude bulk-extraction call.
+
+    prefetched_page: (url, content) — when provided, skip the SerpAPI search
+        entirely and go straight to bulk extraction.  Used when a sibling field
+        shares the same directory_probe_query_he so the search doesn't run twice.
+
+    found_page_out: caller-provided list — when a qualifying page is found, its
+        (url, content) is appended so the caller can share it with sibling fields.
     """
     probe_query = field.directory_probe_query_he
     if not probe_query:
         return None
 
+    # ── Fast path: caller already found a qualifying page for this query ────
+    if prefetched_page is not None:
+        url, content = prefetched_page
+        print(f"  [probe] field={field.id!r} CACHE-HIT query={probe_query!r} "
+              f"— skipping search, reusing {url[:60]!r}")
+        bulk = bulk_extract_from_source(field, entities, url, content, claude)
+        found_count = sum(1 for r in bulk.values() if r.value)
+        print(f"  [probe] result: {found_count}/{len(entities)} entities filled")
+        if found_count >= max(1, len(entities) * 0.10):
+            return bulk
+        return None
+
+    # ── Normal path: search for the directory page ──────────────────────────
     print(f"  [probe] field={field.id!r} query={probe_query!r}")
 
     try:
@@ -909,8 +931,10 @@ def probe_field_list(
         found_count = sum(1 for r in bulk.values() if r.value)
         print(f"  [probe] result: {found_count}/{len(entities)} entities filled")
 
-        # Only accept if we actually extracted something useful
         if found_count >= max(1, len(entities) * 0.10):
+            # Share the qualifying page with sibling fields that have the same query
+            if found_page_out is not None:
+                found_page_out.append((url, content))
             return bulk
 
     return None
@@ -1578,6 +1602,8 @@ def search_and_extract_batched(
     tracer=None,
     max_results: int = 5,
     search_budget: int | None = None,
+    seed_pages: dict[str, tuple[str, str | None]] | None = None,
+    page_sink: dict[str, tuple[str, str | None]] | None = None,
 ) -> dict[str, list[ExtractionResult]]:
     """
     Process MULTIPLE fields for one entity with cross-field page deduplication.
@@ -1588,6 +1614,12 @@ def search_and_extract_batched(
                one per field). For a single-field call we fall back to the
                existing single-field extractor so memory examples are used.
       Phase 4: Wikidata-injected results are merged in per field unchanged.
+
+    seed_pages: pre-fetched {url → (content, pub_date)} from a prior lane.
+      URLs in this dict are pre-loaded into shared_seen so they are not
+      re-fetched, and their content is included in extraction.
+    page_sink: if provided, every newly fetched page is added here so the
+      next lane can pass it as seed_pages.
 
     Returns {field_id → list[ExtractionResult]} — same shape as N calls to
     search_and_extract, but each page is processed once, regardless of how
@@ -1601,9 +1633,12 @@ def search_and_extract_batched(
     # Phase 1 — gather pages per field. SHARED seen_urls avoids re-fetching
     # the same URL across fields' search phases. A shared counter enforces a
     # per-entity search budget so early entities can't starve later ones.
-    shared_seen: set[str] = set()
+    # Pre-seed seen_urls with pages already fetched by a prior lane so those
+    # URLs are skipped in searches (they'll still be extracted below).
+    shared_seen: set[str] = set(seed_pages.keys()) if seed_pages else set()
     entity_search_count: list[int] = [0]
-    all_urls_with_content: dict[str, tuple[str, str | None]] = {}
+    # Start with seeded pages so they participate in extraction.
+    all_urls_with_content: dict[str, tuple[str, str | None]] = dict(seed_pages) if seed_pages else {}
     for field in fields:
         pages, wikidata_results = _gather_pages_for_field(
             field, entity, resolved_deps, tavily, seen_urls=shared_seen, tracer=tracer,
@@ -1612,7 +1647,10 @@ def search_and_extract_batched(
         )
         results[field.id].extend(wikidata_results)
         for url, content, pub_date in pages:
+            is_new = url not in all_urls_with_content
             all_urls_with_content.setdefault(url, (content, pub_date))
+            if is_new and page_sink is not None and url not in (seed_pages or {}):
+                page_sink[url] = (content, pub_date)
 
     if not all_urls_with_content:
         return results

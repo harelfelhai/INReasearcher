@@ -176,11 +176,17 @@ def _process_entity_sync(
     lane2_fields = [f for f in plan.columns if not f.depends_on and f.id not in probe_handled]
     deferred = [f for f in plan.columns if f.depends_on]
 
+    # Pages fetched by Lane 2 are collected here so Lane 3 can reuse them
+    # without re-fetching (same entity, different fields — same pages often
+    # appear in both lanes' search results).
+    lane2_pages: dict = {}
+
     if lane2_fields:
         batched = search_and_extract_batched(
             fields=lane2_fields, entity=entity,
             resolved_deps=resolved, tavily=search,
             claude=claude, memory=memory, tracer=tr,
+            page_sink=lane2_pages,
         )
         for f in lane2_fields:
             extractions = batched.get(f.id, [])
@@ -208,6 +214,7 @@ def _process_entity_sync(
             fields=deferred, entity=entity,
             resolved_deps=resolved, tavily=search,
             claude=claude, memory=memory, tracer=tr,
+            seed_pages=lane2_pages if lane2_pages else None,
         )
         for f in deferred:
             extractions = batched_def.get(f.id, [])
@@ -569,21 +576,42 @@ def api_run(
                         })
 
             # ── Phase 0b: Standard probe per field (parallelised) ────────────
-            # All probe searches are I/O-bound; run them concurrently via
-            # asyncio.to_thread so fields don't block each other.
+            # Fields that share the same directory_probe_query_he would run
+            # identical SerpAPI searches in parallel. We group by query so the
+            # first field ("primary") runs the search and captures the winning
+            # page; subsequent fields ("secondary") reuse that page directly,
+            # skipping a redundant network round-trip.
             fields_to_probe = [
                 f for f in plan.columns
                 if f.id not in probe_results and f.directory_probe_query_he
             ]
             if fields_to_probe:
-                probe_outcomes = await asyncio.gather(
+                # Group fields by their probe query; first field in each group
+                # is the primary (runs real search); the rest are secondaries.
+                query_to_primary: dict[str, object] = {}
+                query_to_secondaries: dict[str, list] = {}
+                for f in fields_to_probe:
+                    q = f.directory_probe_query_he
+                    if q not in query_to_primary:
+                        query_to_primary[q] = f
+                    else:
+                        query_to_secondaries.setdefault(q, []).append(f)
+
+                primary_fields = list(query_to_primary.values())
+                # One output-list per primary to receive the winning page URL+content
+                found_page_outs: list[list] = [[] for _ in primary_fields]
+
+                primary_outcomes = await asyncio.gather(
                     *[
-                        asyncio.to_thread(probe_field_list, f, entities, search, claude)
-                        for f in fields_to_probe
+                        asyncio.to_thread(
+                            probe_field_list, f, entities, search, claude,
+                            found_page_out=fpo,
+                        )
+                        for f, fpo in zip(primary_fields, found_page_outs)
                     ],
                     return_exceptions=True,
                 )
-                for field, result in zip(fields_to_probe, probe_outcomes):
+                for field, result in zip(primary_fields, primary_outcomes):
                     if isinstance(result, Exception):
                         continue
                     if result:
@@ -594,6 +622,36 @@ def api_run(
                             "entities_found": found_n,
                             "entities_total": len(entities),
                         })
+
+                # Run secondary fields — reuse the winning page from the primary
+                # if one was captured; otherwise fall back to a normal search.
+                secondary_tasks = []
+                secondary_fields_flat = []
+                for f_primary, fpo in zip(primary_fields, found_page_outs):
+                    q = f_primary.directory_probe_query_he
+                    for f_sec in query_to_secondaries.get(q, []):
+                        prefetched = fpo[0] if fpo else None
+                        secondary_tasks.append(
+                            asyncio.to_thread(
+                                probe_field_list, f_sec, entities, search, claude,
+                                prefetched_page=prefetched,
+                            )
+                        )
+                        secondary_fields_flat.append(f_sec)
+
+                if secondary_tasks:
+                    sec_outcomes = await asyncio.gather(*secondary_tasks, return_exceptions=True)
+                    for field, result in zip(secondary_fields_flat, sec_outcomes):
+                        if isinstance(result, Exception):
+                            continue
+                        if result:
+                            probe_results[field.id] = result
+                            found_n = sum(1 for r in result.values() if r.value)
+                            yield _sse("probe_hit", {
+                                "field_id": field.id,
+                                "entities_found": found_n,
+                                "entities_total": len(entities),
+                            })
 
             # ── Phase 1: Entity loop (parallel) ──────────────────────────────
             # Fire entity_start for every entity immediately, then run all
