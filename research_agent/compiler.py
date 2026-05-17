@@ -465,8 +465,8 @@ entities at once. This enables a major cost optimisation (one page → N entitie
 
 # ── Helpers ──────────────────────────────────────────────────────────────────
 
-def _call_tool(client: anthropic.Anthropic, system: str, tool: dict, user: str, max_tokens: int = 2048) -> dict:
-    response = client.messages.create(
+def _call_tool(client: anthropic.Anthropic, system: str, tool: dict, user: str, max_tokens: int = 2048, temperature: float | None = None) -> dict:
+    kwargs = dict(
         model=_HAIKU,
         max_tokens=max_tokens,
         system=system,
@@ -474,6 +474,9 @@ def _call_tool(client: anthropic.Anthropic, system: str, tool: dict, user: str, 
         tool_choice={"type": "any"},
         messages=[{"role": "user", "content": user}],
     )
+    if temperature is not None:
+        kwargs["temperature"] = temperature
+    response = client.messages.create(**kwargs)
     tool_block = next(b for b in response.content if b.type == "tool_use")
     return tool_block.input
 
@@ -582,6 +585,7 @@ def audit_schema(
         f"Columns:\n{columns_summary}\n\n"
         "Audit each column.",
         max_tokens=1500,
+        temperature=0,
     )
     return FieldAuditReport(
         all_clear=data["all_clear"],
