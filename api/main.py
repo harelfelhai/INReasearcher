@@ -671,7 +671,7 @@ def api_run(
             # batch-extract calls; running all of them at once trivially blows
             # past the org's per-minute token rate limit. A small semaphore
             # keeps the system within limits without sacrificing parallelism.
-            _entity_concurrency = int(os.getenv("ENTITY_CONCURRENCY", "3"))
+            _entity_concurrency = int(os.getenv("ENTITY_CONCURRENCY", "2"))
             _entity_sem = asyncio.Semaphore(_entity_concurrency)
 
             async def _run_one(entity_name: str):
@@ -807,7 +807,7 @@ async def api_deepen(
         ]
         entities_with_fields = [(e, fs) for e, fs in entities_with_fields if fs]
 
-        _sem = asyncio.Semaphore(int(os.getenv("ENTITY_CONCURRENCY", "3")))
+        _sem = asyncio.Semaphore(int(os.getenv("ENTITY_CONCURRENCY", "2")))
         found_total = 0
 
         async def _one(entity: str, fields: list):

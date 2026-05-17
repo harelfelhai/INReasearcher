@@ -731,6 +731,8 @@ def batch_extract_fields_from_source(
     results: dict[str, ExtractionResult] = {}
 
     for ext in extractions_raw:
+        if not isinstance(ext, dict):
+            continue
         fid = ext.get("field_id", "")
         if fid not in field_by_id:
             continue
@@ -1501,7 +1503,7 @@ def _gather_pages_for_field(
             try:
                 return q, tavily.search(
                     q, max_results=max_results, include_raw_content=True,
-                ).get("results", [])
+                ).get("results", [])[:max_results]
             except Exception as exc:
                 if attempt < _MAX_RETRIES:
                     wait = 2.0 * (attempt + 1)
@@ -1607,7 +1609,7 @@ def search_and_extract_batched(
     claude: anthropic.Anthropic,
     memory: SuccessMemory | None = None,
     tracer=None,
-    max_results: int = 5,
+    max_results: int = 3,
     search_budget: int | None = None,
     seed_pages: dict[str, tuple[str, str | None]] | None = None,
     page_sink: dict[str, tuple[str, str | None]] | None = None,
