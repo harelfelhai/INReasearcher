@@ -643,17 +643,33 @@ def enrich_with_queries(
         + (f"  [USER CLARIFICATION: {clarifications[c.id]}]" if c.id in clarifications else "")
         for c in plan.columns
     )
-    data = _call_tool(
-        client,
-        _QUERIES_SYSTEM,
-        _QUERIES_TOOL,
+    prompt = (
         f"Research question: {plan.research_question_original}\n"
         f"Entity type: {plan.entity_type}\n"
         f"Approved columns:\n{columns_summary}\n\n"
         "Enrich each column with search queries and source preferences.\n"
         "For columns with a USER CLARIFICATION note, generate queries that "
-        "specifically target what the clarification describes.",
+        "specifically target what the clarification describes."
     )
+    # Each column needs ~300 tokens of output (queries + strategy + domains).
+    # Use a generous cap so the response is never truncated mid-JSON.
+    enrich_max_tokens = max(2048, len(plan.columns) * 350)
+
+    data = None
+    for attempt in range(3):
+        raw = _call_tool(client, _QUERIES_SYSTEM, _QUERIES_TOOL, prompt,
+                         max_tokens=enrich_max_tokens)
+        if "columns" in raw:
+            data = raw
+            break
+        print(f"[compiler] enrich attempt {attempt + 1}: missing 'columns' key, retrying…")
+
+    if data is None:
+        raise RuntimeError(
+            "enrich_with_queries: Claude did not return a valid 'columns' list "
+            "after 3 attempts. The schema may be too large or the model is "
+            "returning an unexpected response."
+        )
 
     enrichment_by_id = {row["id"]: row for row in data["columns"]}
     enriched_columns: list[ColumnPlan] = []
