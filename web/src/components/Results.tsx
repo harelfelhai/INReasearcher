@@ -10,7 +10,7 @@ import {
   type RunDonePayload,
   type SeededProbe,
 } from "../api";
-import type { CellFeedback, EntityResult, ResearchPlan, SearchEngine, VerifiedCell } from "../types";
+import type { CellFeedback, CellSource, EntityResult, ResearchPlan, SearchEngine, VerifiedCell } from "../types";
 
 interface Props {
   plan: ResearchPlan;
@@ -18,6 +18,101 @@ interface Props {
   searchEngine: SearchEngine;
   seededProbe?: SeededProbe;
   onRestart: () => void;
+}
+
+// ── Cell confidence dot ───────────────────────────────────────────────────────
+
+const CONF_DOT: Record<string, string> = {
+  HIGH:      "bg-emerald-500",
+  MEDIUM:    "bg-amber-400",
+  LOW:       "bg-orange-500",
+  NOT_FOUND: "bg-slate-300",
+};
+
+// ── Source line with quote tooltip ────────────────────────────────────────────
+
+function SourceLine({ src }: { src: CellSource }) {
+  const label = src.domain ?? (src.url ? (() => { try { return new URL(src.url!).hostname; } catch { return src.url!; } })() : null);
+  if (!label && !src.quote) return null;
+
+  return (
+    <div className="relative group/src flex items-center gap-1 text-xs text-slate-500 min-w-0">
+      {src.url ? (
+        <a
+          href={src.url}
+          target="_blank"
+          rel="noreferrer"
+          className="text-blue-600 hover:underline truncate max-w-[120px]"
+        >
+          {label}
+        </a>
+      ) : (
+        <span className="truncate max-w-[120px]">{label}</span>
+      )}
+      {src.date && (
+        <span className="shrink-0 text-slate-400">{src.date.slice(0, 7)}</span>
+      )}
+
+      {/* Quote tooltip — appears above on hover */}
+      {src.quote && (
+        <div
+          className="pointer-events-none absolute bottom-full right-0 mb-1.5 z-20
+                     w-72 rounded-lg bg-slate-800 text-white shadow-xl
+                     opacity-0 group-hover/src:opacity-100 transition-opacity duration-150
+                     p-3 text-xs leading-relaxed"
+          dir="auto"
+        >
+          <span className="text-slate-400 text-[10px] block mb-1">ציטוט מהמקור</span>
+          "{src.quote}"
+          {src.url && (
+            <span className="block mt-1.5 text-slate-400 text-[10px] break-all">{src.url}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Single verified cell ──────────────────────────────────────────────────────
+
+function CellDisplay({ cell }: { cell: VerifiedCell }) {
+  const dotColor = CONF_DOT[cell.confidence] ?? "bg-slate-300";
+
+  // Deduplicate sources by URL; fall back to primary_source if all_sources empty
+  const sources: CellSource[] = (() => {
+    const raw = cell.all_sources?.length ? cell.all_sources : (cell.primary_source ? [cell.primary_source] : []);
+    const seen = new Set<string>();
+    return raw.filter(s => {
+      const key = s.url ?? s.domain ?? s.quote ?? "";
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  })();
+
+  const isStale = cell.flags?.some(f => f.startsWith("all_sources_stale"));
+
+  return (
+    <td className="p-2 align-top">
+      <div dir="auto" className="leading-snug">{cell.value}</div>
+      <div className="mt-1.5 flex items-start gap-1.5">
+        {/* Confidence dot */}
+        <span
+          className={`mt-0.5 w-2 h-2 rounded-full shrink-0 ${dotColor}`}
+          title={cell.confidence}
+        />
+        {/* Sources */}
+        <div className="space-y-0.5 min-w-0">
+          {sources.map((src, i) => (
+            <SourceLine key={i} src={src} />
+          ))}
+          {isStale && (
+            <span className="text-[10px] text-amber-600">⚠ מקורות ישנים</span>
+          )}
+        </div>
+      </div>
+    </td>
+  );
 }
 
 // ── Post-run feedback panel ───────────────────────────────────────────────────
@@ -336,7 +431,7 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
             <tr>
               <th className="p-2">ישות</th>
               {plan.columns.map((c) => (
-                <th key={c.id} className="p-2 font-mono">{c.id}</th>
+                <th key={c.id} className="p-2" dir="auto" title={c.id}>{c.label_he}</th>
               ))}
               <th className="p-2">הערות</th>
             </tr>
@@ -348,44 +443,9 @@ export default function Results({ plan, entities, searchEngine, seededProbe, onR
                 {plan.columns.map((c) => {
                   const cell = r.cells[c.id];
                   if (!cell || cell.value === null) {
-                    return <td key={c.id} className="p-2 text-slate-400">לא נמצא</td>;
+                    return <td key={c.id} className="p-2 text-slate-400 text-sm">—</td>;
                   }
-                  return (
-                    <td key={c.id} className="p-2 align-top">
-                      <div dir="auto">{cell.value}</div>
-                      <div className="text-xs text-slate-500 mt-0.5">
-                        [{cell.confidence}]
-                        {cell.primary_source?.url && (
-                          <>
-                            {" · "}
-                            <a
-                              href={cell.primary_source.url}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-blue-600 hover:underline font-mono"
-                              title={cell.primary_source.url}
-                            >
-                              {cell.primary_source.domain ?? new URL(cell.primary_source.url).hostname}
-                            </a>
-                            {cell.primary_source.date && (
-                              <span className={
-                                cell.flags?.some(f => f.startsWith("all_sources_stale") || f.startsWith("primary_source_stale"))
-                                  ? "text-amber-600 mr-1"
-                                  : "text-slate-400 mr-1"
-                              }>
-                                {" "}· {cell.primary_source.date.slice(0, 7)}
-                              </span>
-                            )}
-                          </>
-                        )}
-                        {cell.flags?.some(f => f.startsWith("all_sources_stale")) && (
-                          <span className="text-amber-600 mr-1" title="כל המקורות ישנים מ-2 שנים — ייתכן שהמידע אינו עדכני">
-                            {" "}⚠ ישן
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                  );
+                  return <CellDisplay key={c.id} cell={cell} />;
                 })}
                 <td className="p-2 text-xs text-slate-500">{r.row_flags.join(", ")}</td>
               </tr>

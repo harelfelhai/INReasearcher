@@ -116,14 +116,22 @@ export interface EntityDiscoveryResult {
   source_domain: string;
 }
 
+export interface CellSource {
+  url?: string | null;
+  domain?: string | null;
+  quote?: string | null;
+  date?: string | null;
+  llm_confidence?: number | null;
+}
+
 export interface VerifiedCell {
   field_id: string;
   label_he: string;
   value: string | null;
   confidence: Confidence;
   corroboration_count: number;
-  primary_source?: { url?: string; quote?: string; domain?: string; date?: string | null } | null;
-  all_sources: unknown[];
+  primary_source?: CellSource | null;
+  all_sources: CellSource[];
   flags: string[];
 }
 
