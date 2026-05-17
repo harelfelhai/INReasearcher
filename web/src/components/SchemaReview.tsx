@@ -13,12 +13,20 @@ interface Props {
 export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved }: Props) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [clarifications, setClarifications] = useState<Record<string, string>>({});
+
+  function setClarification(fieldId: string, text: string) {
+    setClarifications(prev => ({ ...prev, [fieldId]: text }));
+  }
 
   async function approve() {
     setLoading(true);
     setError(null);
     try {
-      const enriched = await enrichPlan(plan);
+      const activeClarifications = Object.fromEntries(
+        Object.entries(clarifications).filter(([, v]) => v.trim() !== "")
+      );
+      const enriched = await enrichPlan(plan, activeClarifications);
       onApproved(enriched);
     } catch (e) {
       setError((e as Error).message);
@@ -87,6 +95,19 @@ export default function SchemaReview({ plan, audit, mockRows, onBack, onApproved
                 <div className="text-amber-700 mt-1" dir="auto">{i.explanation_en}</div>
                 <div className="text-amber-800 mt-2" dir="auto">
                   <span className="font-medium">תיקון מוצע: </span>{i.suggested_fix_he}
+                </div>
+                <div className="mt-3">
+                  <label className="block text-xs font-medium text-amber-800 mb-1">
+                    הבהרה שלך (אופציונלי) — תשפיע על שאילתות החיפוש:
+                  </label>
+                  <input
+                    type="text"
+                    dir="auto"
+                    placeholder={i.suggested_fix_he}
+                    value={clarifications[i.field_id] ?? ""}
+                    onChange={e => setClarification(i.field_id, e.target.value)}
+                    className="w-full border border-amber-300 rounded px-2 py-1.5 text-sm bg-white placeholder-amber-300 focus:outline-none focus:ring-2 focus:ring-amber-400"
+                  />
                 </div>
               </li>
             ))}

@@ -245,6 +245,12 @@ ask:
      FAIL: "name" — full? nickname? Hebrew/English?
      PASS: "full_name_hebrew", "official_website_url"
 
+     IMPORTANT EXCEPTION: do NOT flag AMBIGUOUS_FORMAT for a field that
+     represents the entity's own name/identity when the entity_type is clearly
+     a person (MK, politician, mayor, public figure, etc.). In that context
+     "name" means the person's official registered name — unambiguous in practice.
+     A researcher looking up a named individual always knows which name is meant.
+
   5. AMBIGUOUS_SCOPE — would two researchers extract the SAME granularity?
      Even if the answer is a single string and objective, the SEMANTIC SCOPE
      can be ambiguous: which slice of reality does this field point at?
@@ -617,14 +623,20 @@ def generate_mock_rows(
 def enrich_with_queries(
     plan: ResearchPlan,
     client: anthropic.Anthropic,
+    clarifications: dict[str, str] | None = None,
 ) -> ResearchPlan:
     """
     Phase B2: add search queries, preferred domains, and corroboration counts
     to an APPROVED schema. Mutates a copy and returns it.
+
+    clarifications: optional {field_id → user note} injected into the prompt
+    so Claude generates more precise queries for flagged fields.
     """
+    clarifications = clarifications or {}
     columns_summary = "\n".join(
         f"  - id={c.id}, label_he={c.label_he!r}, label_en={c.label_en!r}, "
         f"type={c.type}, temporal_anchor={c.temporal_anchor!r}"
+        + (f"  [USER CLARIFICATION: {clarifications[c.id]}]" if c.id in clarifications else "")
         for c in plan.columns
     )
     data = _call_tool(
@@ -634,7 +646,9 @@ def enrich_with_queries(
         f"Research question: {plan.research_question_original}\n"
         f"Entity type: {plan.entity_type}\n"
         f"Approved columns:\n{columns_summary}\n\n"
-        "Enrich each column with search queries and source preferences.",
+        "Enrich each column with search queries and source preferences.\n"
+        "For columns with a USER CLARIFICATION note, generate queries that "
+        "specifically target what the clarification describes.",
     )
 
     enrichment_by_id = {row["id"]: row for row in data["columns"]}

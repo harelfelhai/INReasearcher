@@ -364,6 +364,11 @@ class PlanOnlyRequest(BaseModel):
     plan: ResearchPlan
 
 
+class EnrichRequest(BaseModel):
+    plan: ResearchPlan
+    clarifications: dict[str, str] = {}
+
+
 class MockResponse(BaseModel):
     rows: list[MockRow]
 
@@ -440,11 +445,11 @@ def api_mock_preview(
 
 @app.post("/api/enrich", response_model=ResearchPlan)
 def api_enrich(
-    req: PlanOnlyRequest,
+    req: EnrichRequest,
     _user: User = Depends(get_current_user),
 ) -> ResearchPlan:
     """Phase B2 — add search queries to an approved schema."""
-    return enrich_with_queries(req.plan, _claude())
+    return enrich_with_queries(req.plan, _claude(), clarifications=req.clarifications or None)
 
 
 # ── Entity discovery ─────────────────────────────────────────────────────────

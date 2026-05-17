@@ -200,8 +200,11 @@ export async function mockPreview(plan: ResearchPlan): Promise<MockRow[]> {
   return data.rows;
 }
 
-export async function enrichPlan(plan: ResearchPlan): Promise<ResearchPlan> {
-  return postJson("/api/enrich", { plan });
+export async function enrichPlan(
+  plan: ResearchPlan,
+  clarifications: Record<string, string> = {},
+): Promise<ResearchPlan> {
+  return postJson("/api/enrich", { plan, clarifications });
 }
 
 // ── Entity discovery (optional, opt-in) ─────────────────────────────────────
