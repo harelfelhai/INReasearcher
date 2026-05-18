@@ -241,6 +241,14 @@
       },
       "CompileRequest": {
         "properties": {
+          "entities": {
+            "default": [],
+            "items": {
+              "type": "string"
+            },
+            "title": "Entities",
+            "type": "array"
+          },
           "entity_type": {
             "default": "",
             "title": "Entity Type",
@@ -330,6 +338,55 @@
         "title": "CreateUserRequest",
         "type": "object"
       },
+      "DeepenMissingCell": {
+        "properties": {
+          "entity": {
+            "title": "Entity",
+            "type": "string"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "entity",
+          "field_id"
+        ],
+        "title": "DeepenMissingCell",
+        "type": "object"
+      },
+      "DeepenRequest": {
+        "properties": {
+          "missing": {
+            "items": {
+              "$ref": "#/components/schemas/DeepenMissingCell"
+            },
+            "title": "Missing",
+            "type": "array"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          },
+          "search_engine": {
+            "default": "serpapi",
+            "enum": [
+              "wikipedia",
+              "serpapi",
+              "duckduckgo",
+              "mock"
+            ],
+            "title": "Search Engine",
+            "type": "string"
+          }
+        },
+        "required": [
+          "plan",
+          "missing"
+        ],
+        "title": "DeepenRequest",
+        "type": "object"
+      },
       "DiscoverPlanRequest": {
         "properties": {
           "entity_type": {
@@ -408,6 +465,26 @@
           "name"
         ],
         "title": "DiscoveredEntity",
+        "type": "object"
+      },
+      "EnrichRequest": {
+        "properties": {
+          "clarifications": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "default": {},
+            "title": "Clarifications",
+            "type": "object"
+          },
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          }
+        },
+        "required": [
+          "plan"
+        ],
+        "title": "EnrichRequest",
         "type": "object"
       },
       "EntityDiscoveryAuditIssue": {
@@ -531,6 +608,34 @@
         "title": "EntityDiscoveryResult",
         "type": "object"
       },
+      "EntityResult": {
+        "properties": {
+          "cells": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/VerifiedCell"
+            },
+            "title": "Cells",
+            "type": "object"
+          },
+          "entity_name": {
+            "title": "Entity Name",
+            "type": "string"
+          },
+          "row_flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Row Flags",
+            "type": "array"
+          }
+        },
+        "required": [
+          "entity_name",
+          "cells"
+        ],
+        "title": "EntityResult",
+        "type": "object"
+      },
       "ExcelExportOut": {
         "properties": {
           "created_at": {
@@ -553,6 +658,26 @@
           "created_at"
         ],
         "title": "ExcelExportOut",
+        "type": "object"
+      },
+      "ExportRequest": {
+        "properties": {
+          "plan": {
+            "$ref": "#/components/schemas/ResearchPlan"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/components/schemas/EntityResult"
+            },
+            "title": "Results",
+            "type": "array"
+          }
+        },
+        "required": [
+          "plan",
+          "results"
+        ],
+        "title": "ExportRequest",
         "type": "object"
       },
       "ExtractionStrategy": {
@@ -623,6 +748,7 @@
               "subjective",
               "missing_anchor",
               "ambiguous_format",
+              "ambiguous_scope",
               "no_canonical_source"
             ],
             "title": "Issue Kind",
@@ -1215,6 +1341,79 @@
           "type"
         ],
         "title": "ValidationError",
+        "type": "object"
+      },
+      "VerifiedCell": {
+        "properties": {
+          "all_sources": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "title": "All Sources",
+            "type": "array"
+          },
+          "confidence": {
+            "enum": [
+              "HIGH",
+              "MEDIUM",
+              "LOW",
+              "NOT_FOUND"
+            ],
+            "title": "Confidence",
+            "type": "string"
+          },
+          "corroboration_count": {
+            "title": "Corroboration Count",
+            "type": "integer"
+          },
+          "field_id": {
+            "title": "Field Id",
+            "type": "string"
+          },
+          "flags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Flags",
+            "type": "array"
+          },
+          "label_he": {
+            "title": "Label He",
+            "type": "string"
+          },
+          "primary_source": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Primary Source"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "required": [
+          "field_id",
+          "label_he",
+          "value",
+          "confidence",
+          "corroboration_count"
+        ],
+        "title": "VerifiedCell",
         "type": "object"
       }
     }
@@ -1822,6 +2021,61 @@
         "summary": "Api Compile Schema"
       }
     },
+    "/api/deepen": {
+      "post": {
+        "description": "Targeted second-pass search for cells that came back NOT_FOUND in a run.\n\nFor each missing (entity, field_id) pair, re-searches with higher result\ncounts (8 vs 5) and a larger per-entity budget (16 calls vs 10).\nStreams `deepen_entity_done` events as entities finish; the frontend\nmerges new cells into the existing results table without a full reload.",
+        "operationId": "api_deepen_api_deepen_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeepenRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Deepen"
+      }
+    },
     "/api/discover-entities/plan": {
       "post": {
         "description": "Phase 0D — generate the discovery query and audit the question.",
@@ -1970,7 +2224,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/PlanOnlyRequest"
+                "$ref": "#/components/schemas/EnrichRequest"
               }
             }
           },
@@ -1999,6 +2253,61 @@
           }
         },
         "summary": "Api Enrich"
+      }
+    },
+    "/api/export": {
+      "post": {
+        "description": "Generate a fresh Excel file from the caller's current results.\n\nThe frontend calls this after a deep-retry completes, when the original\nserver-side export no longer reflects the updated table. Takes the full\nresults (including any deepened cells) and returns xlsx bytes directly.\nNo DB record is created — the file is returned inline.",
+        "operationId": "api_export_api_export_post",
+        "parameters": [
+          {
+            "in": "header",
+            "name": "authorization",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Authorization"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            },
+            "description": "Successful Response"
+          },
+          "422": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            },
+            "description": "Validation Error"
+          }
+        },
+        "summary": "Api Export"
       }
     },
     "/api/health": {

@@ -19,6 +19,23 @@ import sys
 from .models import EntityResult, VerifiedCell, ColumnPlan
 
 
+_CONF_HE = {
+    "HIGH": "גבוה",
+    "MEDIUM": "בינוני",
+    "LOW": "נמוך",
+    "NOT_FOUND": "לא נמצא",
+}
+
+_CONF_COLOR = {
+    "HIGH": "16A34A",    # green-600
+    "MEDIUM": "D97706",  # amber-600
+    "LOW": "EA580C",     # orange-600
+    "NOT_FOUND": "6B7280",  # gray-500
+}
+
+_MAX_SOURCES = 3  # per-field source columns written to xlsx
+
+
 def _build_xlsx_workbook(results: list[EntityResult], plan_columns: list[ColumnPlan]):
     """Build and return an openpyxl Workbook for the given results."""
     from openpyxl import Workbook
@@ -29,36 +46,86 @@ def _build_xlsx_workbook(results: list[EntityResult], plan_columns: list[ColumnP
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "Results"
+    ws.title = "תוצאות"
     ws.sheet_view.rightToLeft = True
 
+    # ── Header row ────────────────────────────────────────────────────────────
     headers = ["ישות"]
     for col_id in col_ids:
         lbl = labels[col_id]
-        headers += [lbl, f"{lbl} · ביטחון", f"{lbl} · מקור", f"{lbl} · ציטוט"]
+        headers += [lbl, f"{lbl} · ביטחון", f"{lbl} · אימותים"]
+        for i in range(1, _MAX_SOURCES + 1):
+            headers += [f"{lbl} · מקור {i}", f"{lbl} · ציטוט {i}"]
+
     ws.append(headers)
-    header_font = Font(bold=True, color="FFFFFF")
+    header_font = Font(bold=True, color="FFFFFF", name="Arial")
     header_fill = PatternFill("solid", fgColor="2563EB")
+    header_align = Alignment(horizontal="center", vertical="center",
+                             wrap_text=True, readingOrder=2)
     for cell in ws[1]:
         cell.font = header_font
         cell.fill = header_fill
-        cell.alignment = Alignment(horizontal="center", vertical="center")
+        cell.alignment = header_align
+
+    # ── Data rows ─────────────────────────────────────────────────────────────
+    rtl_align = Alignment(horizontal="right", vertical="top",
+                          wrap_text=True, readingOrder=2)
+    default_font = Font(name="Arial")
 
     for result in results:
-        row = [result.entity_name]
+        row_data: list = [result.entity_name]
         for col_id in col_ids:
-            cell = result.cells.get(col_id)
-            if cell is None or cell.confidence == "NOT_FOUND":
-                row += ["", "NOT_FOUND", "", ""]
+            cell_obj = result.cells.get(col_id)
+            if cell_obj is None or cell_obj.confidence == "NOT_FOUND":
+                row_data += ["", _CONF_HE["NOT_FOUND"], ""]
+                row_data += ["", ""] * _MAX_SOURCES
                 continue
-            src_url = cell.primary_source.get("url", "") if cell.primary_source else ""
-            quote = cell.primary_source.get("quote", "") if cell.primary_source else ""
-            row += [cell.value or "", cell.confidence, src_url, quote or ""]
-        ws.append(row)
 
-    for column_cells in ws.columns:
-        max_len = max((len(str(c.value)) if c.value else 0) for c in column_cells)
-        ws.column_dimensions[column_cells[0].column_letter].width = min(max_len + 4, 60)
+            conf_label = _CONF_HE.get(cell_obj.confidence, cell_obj.confidence)
+            corr = getattr(cell_obj, "corroboration_count", 0) or 0
+            row_data += [cell_obj.value or "", conf_label, str(corr)]
+
+            # Collect up to _MAX_SOURCES sources (prefer all_sources, fall back to primary)
+            sources = list(getattr(cell_obj, "all_sources", None) or [])
+            if not sources and cell_obj.primary_source:
+                sources = [cell_obj.primary_source]
+            sources = sources[:_MAX_SOURCES]
+
+            for src in sources:
+                url = src.get("url", "") if isinstance(src, dict) else getattr(src, "url", "") or ""
+                quote = src.get("quote", "") if isinstance(src, dict) else getattr(src, "quote", "") or ""
+                row_data += [url or "", quote or ""]
+            # Pad missing source slots with empty pairs
+            for _ in range(_MAX_SOURCES - len(sources)):
+                row_data += ["", ""]
+
+        ws.append(row_data)
+        # Style the last appended row
+        row_idx = ws.max_row
+        for col_idx, cell in enumerate(ws[row_idx], start=1):
+            cell.font = default_font
+            cell.alignment = rtl_align
+
+    # ── Confidence column coloring ─────────────────────────────────────────────
+    # Per-field block layout: value(0), confidence(1), corr_count(2), src1_url(3), src1_q(4), ...
+    field_block_size = 3 + 2 * _MAX_SOURCES
+    for f_idx in range(len(col_ids)):
+        # 1-based: entity(col 1), then blocks of field_block_size; confidence is offset 2 in block
+        conf_col = 1 + f_idx * field_block_size + 2
+        for row_idx in range(2, ws.max_row + 1):
+            cell = ws.cell(row=row_idx, column=conf_col)
+            conf_key = next(
+                (k for k, v in _CONF_HE.items() if v == cell.value), None
+            )
+            if conf_key and conf_key in _CONF_COLOR:
+                cell.font = Font(name="Arial", bold=True, color=_CONF_COLOR[conf_key])
+
+    # ── Column widths ──────────────────────────────────────────────────────────
+    for col_cells in ws.columns:
+        max_len = max(
+            (len(str(c.value).split("\n")[0]) if c.value else 0) for c in col_cells
+        )
+        ws.column_dimensions[col_cells[0].column_letter].width = min(max_len + 4, 55)
 
     return wb
 
