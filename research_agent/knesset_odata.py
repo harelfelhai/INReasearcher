@@ -116,34 +116,41 @@ def _build_odata_url(entity_set: str, **odata_params: str) -> str:
     return f"{_base_url()}/{entity_set}?{'&'.join(parts)}"
 
 
+def _full_name(person: dict) -> str:
+    """Compose 'FirstName LastName' (Hebrew) from a KNS_Person row."""
+    first = _norm(person.get("FirstName") or "")
+    last  = _norm(person.get("LastName")  or "")
+    return f"{first} {last}".strip()
+
+
 def find_mk_by_name(name: str) -> Optional[dict]:
     """
-    Query KNS_Person for an MK whose Name (or LastName) contains `name`.
+    Query KNS_Person for an MK whose LastName contains `name`.
 
     Strategy:
       1. Use only the LAST WORD of the name (likely surname) as the search
-         token — multi-word substring matches are unreliable in Hebrew OData.
-      2. Filter against the Name field (which in KNS_Person is "LastName FirstName"
-         in Hebrew, so the surname appears at the start).
-      3. Build URL with literal $ characters (server requirement).
-
-    Returns first hit or None. Logs HIT / MISS / ERROR with the actual URL on
-    error, so debugging API contract drift is straightforward.
+         token — KNS_Person stores LastName and FirstName as separate fields.
+      2. Filter substringof() against the LastName field — this is the actual
+         field name in the Knesset OData schema (verified against the live
+         service document). There is NO 'Name' field.
+      3. If multiple rows return and FirstName is supplied, prefer the row
+         whose FirstName matches; otherwise fall back to the first hit.
+      4. Build URL with literal $ characters (server requirement).
     """
     name_n = _norm(name)
     if not name_n:
         return None
 
-    # Search by surname only — single token, most discriminating
     tokens = name_n.split()
     needle = tokens[-1] if tokens else name_n
+    first_hint = tokens[0] if len(tokens) > 1 else ""
 
-    filter_expr = f"substringof('{needle}',Name) eq true"
+    filter_expr = f"substringof('{needle}',LastName) eq true"
     url = _build_odata_url(
         "KNS_Person",
         filter=filter_expr,
         format="json",
-        top="5",
+        top="10",
     )
 
     try:
@@ -159,10 +166,22 @@ def find_mk_by_name(name: str) -> Optional[dict]:
              result="MISS", reason="no_matches")
         return None
 
+    # Prefer the row whose FirstName matches the hint (disambiguates surname
+    # collisions like נתניהו בנימין vs נתניהו שרה).
+    if first_hint:
+        for p in persons:
+            if _norm(p.get("FirstName") or "") == first_hint:
+                _log("mk_lookup", name=name_n, needle=needle, result="HIT",
+                     person_id=p.get("PersonID"),
+                     matched_name=_full_name(p),
+                     total_found=len(persons),
+                     disambiguated_by="first_name")
+                return p
+
     hit = persons[0]
     _log("mk_lookup", name=name_n, needle=needle, result="HIT",
          person_id=hit.get("PersonID"),
-         matched_name=hit.get("Name", ""),
+         matched_name=_full_name(hit),
          total_found=len(persons))
     return hit
 
@@ -219,22 +238,23 @@ def format_mk_as_text(person: dict, positions: list[dict]) -> str:
     that existing extraction strategies (regex anchors, keyword windowing)
     work without any changes.
     """
-    name     = _norm(person.get("Name")      or "")
-    first    = _norm(person.get("FirstName") or "")
-    last     = _norm(person.get("LastName")  or "")
-    full     = name or f"{first} {last}".strip()
-    email    = _norm(person.get("Email")     or "")
-    birth_raw = person.get("BirthDate") or ""
-    birth    = birth_raw[:10] if birth_raw else ""
+    full        = _full_name(person)
+    email       = _norm(person.get("Email") or "")
+    gender_desc = _norm(person.get("GenderDesc") or "")
+    is_current  = person.get("IsCurrent")
 
     lines = [
         "מקור: מאגר הכנסת — API פתוח (OData)",
         f"שם מלא: {full}",
     ]
-    if birth:
-        lines.append(f"תאריך לידה: {birth}")
+    if gender_desc:
+        lines.append(f"מגדר: {gender_desc}")
     if email:
         lines.append(f"דוא\"ל: {email}")
+    if is_current is True:
+        lines.append("חבר/ת כנסת מכהן/ת כיום: כן")
+    elif is_current is False:
+        lines.append("חבר/ת כנסת מכהן/ת כיום: לא")
 
     # Collect distinct (knesset_num, faction_id) pairs — deduplicated
     knesset_factions: dict[int, set[int]] = {}

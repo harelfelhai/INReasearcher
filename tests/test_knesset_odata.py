@@ -28,11 +28,13 @@ def _clean_env(monkeypatch):
 
 _PERSON = {
     "PersonID": 877,
-    "Name": "נתניהו בנימין",
     "FirstName": "בנימין",
     "LastName": "נתניהו",
-    "BirthDate": "1949-10-21T00:00:00",
+    "GenderID": 251,
+    "GenderDesc": "זכר",
     "Email": "netanyahu@knesset.gov.il",
+    "IsCurrent": True,
+    "LastUpdatedDate": "2024-07-28T21:41:35.37",
 }
 
 _POSITIONS = [
@@ -103,7 +105,19 @@ def test_find_mk_by_name_hit():
         result = knesset_odata.find_mk_by_name("נתניהו")
     assert result is not None
     assert result["PersonID"] == 877
-    assert result["Name"] == "נתניהו בנימין"
+    assert result["LastName"] == "נתניהו"
+    assert result["FirstName"] == "בנימין"
+
+
+def test_find_mk_by_name_disambiguates_by_first_name():
+    rows = [
+        {**_PERSON, "PersonID": 999, "FirstName": "שרה"},
+        _PERSON,   # the one we actually want
+    ]
+    with patch.object(knesset_odata, "_knesset_fetch",
+                      return_value={"value": rows}):
+        result = knesset_odata.find_mk_by_name("בנימין נתניהו")
+    assert result["PersonID"] == 877
 
 
 def test_find_mk_by_name_miss():
@@ -126,10 +140,11 @@ def test_find_mk_by_name_empty_string():
     assert result is None
 
 
-def test_find_mk_by_name_returns_first_of_multiple():
-    persons = [_PERSON, {**_PERSON, "PersonID": 999, "Name": "נתניהו שרה"}]
+def test_find_mk_by_name_returns_first_when_no_disambiguation():
+    persons = [_PERSON, {**_PERSON, "PersonID": 999, "FirstName": "שרה"}]
     with patch.object(knesset_odata, "_knesset_fetch",
                       return_value={"value": persons}):
+        # Only surname given — no first-name hint to disambiguate
         result = knesset_odata.find_mk_by_name("נתניהו")
     assert result["PersonID"] == 877   # first row
 
@@ -187,14 +202,14 @@ def test_format_mk_as_text_contains_full_name():
     with patch.object(knesset_odata, "_knesset_fetch",
                       return_value={"Name": "הליכוד"}):
         text = knesset_odata.format_mk_as_text(_PERSON, _POSITIONS)
-    assert "נתניהו בנימין" in text
+    assert "בנימין נתניהו" in text
 
 
-def test_format_mk_as_text_contains_birth_date():
+def test_format_mk_as_text_contains_gender():
     with patch.object(knesset_odata, "_knesset_fetch",
                       return_value={"Name": "הליכוד"}):
         text = knesset_odata.format_mk_as_text(_PERSON, _POSITIONS)
-    assert "1949-10-21" in text
+    assert "זכר" in text
 
 
 def test_format_mk_as_text_contains_knesset_numbers():
@@ -216,18 +231,18 @@ def test_format_mk_as_text_no_positions():
     with patch.object(knesset_odata, "_knesset_fetch",
                       return_value={"Name": "הליכוד"}):
         text = knesset_odata.format_mk_as_text(_PERSON, [])
-    assert "נתניהו בנימין" in text
+    assert "בנימין נתניהו" in text
     assert isinstance(text, str)
     assert len(text) > 20
 
 
-def test_format_mk_as_text_missing_birth_date():
-    person = {**_PERSON, "BirthDate": None}
+def test_format_mk_as_text_missing_optional_fields():
+    person = {"PersonID": 1, "FirstName": "בנימין", "LastName": "נתניהו"}
     with patch.object(knesset_odata, "_knesset_fetch",
                       return_value={"Name": "הליכוד"}):
         text = knesset_odata.format_mk_as_text(person, [])
-    # No crash; birth line simply omitted
-    assert "נתניהו בנימין" in text
+    # No crash; optional lines simply omitted
+    assert "בנימין נתניהו" in text
 
 
 # ── inject_knesset_mk_data ────────────────────────────────────────────────────
