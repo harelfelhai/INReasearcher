@@ -101,41 +101,66 @@ def is_mk_context(entity_type: Optional[str]) -> bool:
     return any(kw in et for kw in _MK_KEYWORDS)
 
 
+def _build_odata_url(entity_set: str, **odata_params: str) -> str:
+    """
+    Build an OData v3 URL with LITERAL '$' characters in option names.
+
+    Knesset's OData server rejects requests where '$filter', '$format', etc.
+    are percent-encoded as '%24filter' (returns 400 Bad Request). The values,
+    however, MUST be URL-encoded — including Hebrew text and quote characters.
+    """
+    parts = []
+    for k, v in odata_params.items():
+        encoded_value = urllib.parse.quote(str(v), safe="")
+        parts.append(f"${k}={encoded_value}")
+    return f"{_base_url()}/{entity_set}?{'&'.join(parts)}"
+
+
 def find_mk_by_name(name: str) -> Optional[dict]:
     """
-    Query KNS_Person for an MK whose Name contains `name`.
+    Query KNS_Person for an MK whose Name (or LastName) contains `name`.
 
-    Uses OData v3 substringof() filter — the Knesset API predates OData v4
-    contains(). Returns the first hit or None on miss / error.
+    Strategy:
+      1. Use only the LAST WORD of the name (likely surname) as the search
+         token — multi-word substring matches are unreliable in Hebrew OData.
+      2. Filter against the Name field (which in KNS_Person is "LastName FirstName"
+         in Hebrew, so the surname appears at the start).
+      3. Build URL with literal $ characters (server requirement).
 
-    Logs result=HIT / MISS / ERROR every time.
+    Returns first hit or None. Logs HIT / MISS / ERROR with the actual URL on
+    error, so debugging API contract drift is straightforward.
     """
     name_n = _norm(name)
     if not name_n:
         return None
 
-    # substringof('value', field) — OData v3 style
-    filter_expr = f"substringof('{name_n}',Name) eq true"
-    params = urllib.parse.urlencode({
-        "$filter": filter_expr,
-        "$format": "json",
-        "$top": "5",
-    })
-    url = f"{_base_url()}/KNS_Person?{params}"
+    # Search by surname only — single token, most discriminating
+    tokens = name_n.split()
+    needle = tokens[-1] if tokens else name_n
+
+    filter_expr = f"substringof('{needle}',Name) eq true"
+    url = _build_odata_url(
+        "KNS_Person",
+        filter=filter_expr,
+        format="json",
+        top="5",
+    )
 
     try:
         data = _knesset_fetch(url)
     except Exception as exc:
-        _log("mk_lookup", name=name_n, result="ERROR", error=str(exc)[:120])
+        _log("mk_lookup", name=name_n, needle=needle, result="ERROR",
+             error=str(exc)[:120], url=url[:200])
         return None
 
     persons = data.get("value", [])
     if not persons:
-        _log("mk_lookup", name=name_n, result="MISS", reason="no_matches")
+        _log("mk_lookup", name=name_n, needle=needle,
+             result="MISS", reason="no_matches")
         return None
 
     hit = persons[0]
-    _log("mk_lookup", name=name_n, result="HIT",
+    _log("mk_lookup", name=name_n, needle=needle, result="HIT",
          person_id=hit.get("PersonID"),
          matched_name=hit.get("Name", ""),
          total_found=len(persons))
@@ -149,13 +174,13 @@ def fetch_mk_positions(person_id: int) -> list[dict]:
     Each row contains: PositionID, FactionID, KnessetNum, StartDate, EndDate.
     Returns empty list on error (no-regression).
     """
-    params = urllib.parse.urlencode({
-        "$filter": f"PersonID eq {person_id}",
-        "$format": "json",
-        "$orderby": "KnessetNum desc",
-        "$top": "30",
-    })
-    url = f"{_base_url()}/KNS_PersonToPosition?{params}"
+    url = _build_odata_url(
+        "KNS_PersonToPosition",
+        filter=f"PersonID eq {person_id}",
+        format="json",
+        orderby="KnessetNum desc",
+        top="30",
+    )
 
     try:
         data = _knesset_fetch(url)
