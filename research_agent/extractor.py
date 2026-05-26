@@ -26,6 +26,7 @@ from tavily import TavilyClient
 from .models import ColumnPlan, ExtractionResult
 from .hebrew_utils import is_grounded
 from .il_catalog import normalize_entity_for_search
+from .knesset_odata import inject_knesset_mk_data
 from .memory import (
     SuccessMemory,
     format_extraction_examples,
@@ -1649,6 +1650,9 @@ def _gather_ranked_pages_for_field(
                 content = hit.get("raw_content") or hit.get("content", "")
                 if content and len(content) >= 80:
                     direct_pages.append((url, content))
+
+    # 1b. Knesset OData injection — MK entities only, prepended to direct_pages.
+    inject_knesset_mk_data(entity, entity_type, direct_pages, seen_urls)
 
     # 2. ONE generic search query — Hebrew preferred, English as fallback.
     queries_he = [q.replace("{entity}", search_entity) for q in field.search_queries_he]
