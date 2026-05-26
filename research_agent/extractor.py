@@ -1652,7 +1652,12 @@ def _gather_ranked_pages_for_field(
                     direct_pages.append((url, content))
 
     # 1b. Knesset OData injection — MK entities only, prepended to direct_pages.
-    inject_knesset_mk_data(entity, entity_type, direct_pages, seen_urls)
+    # IMPORTANT: pass the catalog-canonicalized name (search_entity), not the
+    # raw user input. Otherwise nickname queries like 'ביבי' surface the wrong
+    # person — Knesset's KNS_Person has 4 MKs whose LastName contains 'ביבי'
+    # (יגאל ביבי et al.); only after catalog normalization 'ביבי' →
+    # 'בנימין נתניהו' do we get the disambiguated FirstName + LastName match.
+    inject_knesset_mk_data(search_entity, entity_type, direct_pages, seen_urls)
 
     # 2. ONE generic search query — Hebrew preferred, English as fallback.
     queries_he = [q.replace("{entity}", search_entity) for q in field.search_queries_he]
