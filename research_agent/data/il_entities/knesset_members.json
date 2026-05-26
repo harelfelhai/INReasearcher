@@ -1,0 +1,138 @@
+{
+  "category": "knesset_member",
+  "version": "1.0.0",
+  "source_notes": "Selected prominent Members of Knesset with well-known Hebrew nicknames and English transliterations. The catalog is intentionally narrow — for entities not listed here, the Knesset OData adapter (research_agent/knesset_odata.py) provides authoritative lookup by surname. The value of catalog entries is ALIAS resolution: 'ביבי' → 'בנימין נתניהו', 'בוז'י' → 'יצחק הרצוג', so search queries built downstream use the canonical form that matches Wikipedia and the Knesset records.",
+  "category_labels_he": [
+    "חבר כנסת",
+    "חברת כנסת",
+    "חברי כנסת",
+    "חברות כנסת",
+    "ח\"כ",
+    "ח׳כ",
+    "חכ",
+    "כנסת",
+    "ראש ממשלה",
+    "ראשי ממשלה",
+    "שר",
+    "שרים"
+  ],
+  "category_labels_en": [
+    "knesset member",
+    "knesset members",
+    "member of knesset",
+    "members of knesset",
+    "mk",
+    "mks",
+    "israeli politician",
+    "israeli politicians",
+    "prime minister",
+    "minister"
+  ],
+  "entities": [
+    {
+      "canonical_he": "בנימין נתניהו",
+      "canonical_en": "Benjamin Netanyahu",
+      "aliases_he": ["ביבי", "ביבי נתניהו", "נתניהו"],
+      "aliases_en": ["Bibi", "Bibi Netanyahu", "Netanyahu"],
+      "wikipedia_he": "בנימין_נתניהו"
+    },
+    {
+      "canonical_he": "יאיר לפיד",
+      "canonical_en": "Yair Lapid",
+      "aliases_he": ["לפיד"],
+      "aliases_en": ["Lapid"],
+      "wikipedia_he": "יאיר_לפיד"
+    },
+    {
+      "canonical_he": "בני גנץ",
+      "canonical_en": "Benny Gantz",
+      "aliases_he": ["גנץ", "בנימין גנץ"],
+      "aliases_en": ["Gantz", "Benjamin Gantz"],
+      "wikipedia_he": "בני_גנץ"
+    },
+    {
+      "canonical_he": "איתמר בן גביר",
+      "canonical_en": "Itamar Ben-Gvir",
+      "aliases_he": ["בן גביר", "בן-גביר", "איתמר בן-גביר"],
+      "aliases_en": ["Ben Gvir", "Ben-Gvir"],
+      "wikipedia_he": "איתמר_בן-גביר"
+    },
+    {
+      "canonical_he": "בצלאל סמוטריץ'",
+      "canonical_en": "Bezalel Smotrich",
+      "aliases_he": ["סמוטריץ", "סמוטריץ'", "בצלאל סמוטריץ"],
+      "aliases_en": ["Smotrich", "Bezalel Smotritz"],
+      "wikipedia_he": "בצלאל_סמוטריץ'"
+    },
+    {
+      "canonical_he": "אריה דרעי",
+      "canonical_en": "Aryeh Deri",
+      "aliases_he": ["דרעי"],
+      "aliases_en": ["Deri", "Aryeh Machluf Deri"],
+      "wikipedia_he": "אריה_דרעי"
+    },
+    {
+      "canonical_he": "יצחק הרצוג",
+      "canonical_en": "Isaac Herzog",
+      "aliases_he": ["הרצוג", "בוז'י", "בוז׳י", "בוז'י הרצוג"],
+      "aliases_en": ["Herzog", "Bougie", "Bougie Herzog"],
+      "wikipedia_he": "יצחק_הרצוג"
+    },
+    {
+      "canonical_he": "נפתלי בנט",
+      "canonical_en": "Naftali Bennett",
+      "aliases_he": ["בנט"],
+      "aliases_en": ["Bennett"],
+      "wikipedia_he": "נפתלי_בנט"
+    },
+    {
+      "canonical_he": "אבי דיכטר",
+      "canonical_en": "Avi Dichter",
+      "aliases_he": ["דיכטר"],
+      "aliases_en": ["Dichter"],
+      "wikipedia_he": "אבי_דיכטר"
+    },
+    {
+      "canonical_he": "מירי רגב",
+      "canonical_en": "Miri Regev",
+      "aliases_he": ["רגב"],
+      "aliases_en": ["Regev"],
+      "wikipedia_he": "מירי_רגב"
+    },
+    {
+      "canonical_he": "אביגדור ליברמן",
+      "canonical_en": "Avigdor Lieberman",
+      "aliases_he": ["ליברמן", "אביגדור ליבמן"],
+      "aliases_en": ["Lieberman", "Liberman"],
+      "wikipedia_he": "אביגדור_ליברמן"
+    },
+    {
+      "canonical_he": "מנסור עבאס",
+      "canonical_en": "Mansour Abbas",
+      "aliases_he": ["עבאס"],
+      "aliases_en": ["Abbas", "Mansur Abbas"],
+      "wikipedia_he": "מנסור_עבאס"
+    },
+    {
+      "canonical_he": "איילת שקד",
+      "canonical_en": "Ayelet Shaked",
+      "aliases_he": ["שקד"],
+      "aliases_en": ["Shaked"],
+      "wikipedia_he": "איילת_שקד"
+    },
+    {
+      "canonical_he": "מירב מיכאלי",
+      "canonical_en": "Merav Michaeli",
+      "aliases_he": ["מיכאלי"],
+      "aliases_en": ["Michaeli"],
+      "wikipedia_he": "מרב_מיכאלי"
+    },
+    {
+      "canonical_he": "גדעון סער",
+      "canonical_en": "Gideon Sa'ar",
+      "aliases_he": ["סער"],
+      "aliases_en": ["Saar", "Sa'ar"],
+      "wikipedia_he": "גדעון_סער"
+    }
+  ]
+}

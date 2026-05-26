@@ -19,9 +19,12 @@ from research_agent import knesset_odata
 
 @pytest.fixture(autouse=True)
 def _clean_env(monkeypatch):
-    """Ensure env kill-switches are unset between tests."""
+    """Ensure env kill-switches are unset and OData caches are cleared."""
     monkeypatch.delenv("KNESSET_ODATA_DISABLED", raising=False)
     monkeypatch.delenv("KNESSET_ODATA_BASE_URL", raising=False)
+    knesset_odata.clear_caches()
+    yield
+    knesset_odata.clear_caches()
 
 
 # ── Fixtures ──────────────────────────────────────────────────────────────────
@@ -337,6 +340,39 @@ def test_inject_prepends_not_appends():
     assert len(pages) == 2
     assert "knesset.gov.il" in pages[0][0]   # Knesset page is first
     assert "example.com" in pages[1][0]
+
+
+def test_repeated_lookups_hit_cache():
+    """Second call with the same name must NOT trigger another HTTP fetch."""
+    call_count = 0
+
+    def _counting_fetch(url):
+        nonlocal call_count
+        call_count += 1
+        return {"value": [_PERSON]}
+
+    with patch.object(knesset_odata, "_knesset_fetch", side_effect=_counting_fetch):
+        knesset_odata.find_mk_by_name("נתניהו")
+        knesset_odata.find_mk_by_name("נתניהו")
+        knesset_odata.find_mk_by_name("נתניהו")
+
+    assert call_count == 1
+
+
+def test_clear_caches_resets_lookup():
+    call_count = 0
+
+    def _counting_fetch(url):
+        nonlocal call_count
+        call_count += 1
+        return {"value": [_PERSON]}
+
+    with patch.object(knesset_odata, "_knesset_fetch", side_effect=_counting_fetch):
+        knesset_odata.find_mk_by_name("נתניהו")
+        knesset_odata.clear_caches()
+        knesset_odata.find_mk_by_name("נתניהו")
+
+    assert call_count == 2
 
 
 def test_inject_network_error_leaves_pages_unchanged():

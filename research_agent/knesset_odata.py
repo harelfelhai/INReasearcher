@@ -28,6 +28,7 @@ import sys
 import unicodedata
 import urllib.parse
 import urllib.request
+from functools import lru_cache
 from typing import Optional
 
 # ── Configuration ─────────────────────────────────────────────────────────────
@@ -116,6 +117,25 @@ def _build_odata_url(entity_set: str, **odata_params: str) -> str:
     return f"{_base_url()}/{entity_set}?{'&'.join(parts)}"
 
 
+# ── In-memory caching ─────────────────────────────────────────────────────────
+#
+# Every (entity, field) pair in cross-entity orchestration calls into
+# _gather_ranked_pages_for_field, which calls inject_knesset_mk_data, which
+# hits the OData API. For 3 fields × 5 entities that's 15 redundant lookups
+# of the same 5 people. We cache the lookup + position + faction calls so
+# each unique (name | person_id | faction_id) hits the network at most once
+# per process. Tests must call clear_caches() to reset between runs.
+#
+# Caches are NOT used when KNESSET_ODATA_DISABLED=1 — _is_disabled() is
+# checked in inject_knesset_mk_data() before any lookup runs.
+
+def clear_caches() -> None:
+    """Drop all cached OData responses. Call between tests."""
+    _cached_find_mk_by_name.cache_clear()
+    _cached_fetch_mk_positions.cache_clear()
+    _cached_fetch_faction_name.cache_clear()
+
+
 def _full_name(person: dict) -> str:
     """Compose 'FirstName LastName' (Hebrew) from a KNS_Person row."""
     first = _norm(person.get("FirstName") or "")
@@ -124,8 +144,17 @@ def _full_name(person: dict) -> str:
 
 
 def find_mk_by_name(name: str) -> Optional[dict]:
+    """Cached wrapper — see _find_mk_by_name_impl for details."""
+    name_n = _norm(name)
+    if not name_n:
+        return None
+    return _cached_find_mk_by_name(name_n)
+
+
+@lru_cache(maxsize=1024)
+def _cached_find_mk_by_name(name_n: str) -> Optional[dict]:
     """
-    Query KNS_Person for an MK whose LastName contains `name`.
+    Query KNS_Person for an MK whose LastName contains `name_n`.
 
     Strategy:
       1. Use only the LAST WORD of the name (likely surname) as the search
@@ -137,10 +166,6 @@ def find_mk_by_name(name: str) -> Optional[dict]:
          whose FirstName matches; otherwise fall back to the first hit.
       4. Build URL with literal $ characters (server requirement).
     """
-    name_n = _norm(name)
-    if not name_n:
-        return None
-
     tokens = name_n.split()
     needle = tokens[-1] if tokens else name_n
     first_hint = tokens[0] if len(tokens) > 1 else ""
@@ -187,11 +212,18 @@ def find_mk_by_name(name: str) -> Optional[dict]:
 
 
 def fetch_mk_positions(person_id: int) -> list[dict]:
+    """Cached wrapper around the KNS_PersonToPosition query."""
+    return list(_cached_fetch_mk_positions(person_id))
+
+
+@lru_cache(maxsize=1024)
+def _cached_fetch_mk_positions(person_id: int) -> tuple[dict, ...]:
     """
     Fetch KNS_PersonToPosition rows for this person, most recent first.
 
     Each row contains: PositionID, FactionID, KnessetNum, StartDate, EndDate.
-    Returns empty list on error (no-regression).
+    Returns empty tuple on error (no-regression). Tuple chosen so the cache
+    returns an immutable value — callers see it as a list via the wrapper.
     """
     url = _build_odata_url(
         "KNS_PersonToPosition",
@@ -205,14 +237,20 @@ def fetch_mk_positions(person_id: int) -> list[dict]:
         data = _knesset_fetch(url)
         rows = data.get("value", [])
         _log("positions_fetch", person_id=person_id, rows=len(rows))
-        return rows
+        return tuple(rows)
     except Exception as exc:
         _log("positions_fetch", person_id=person_id,
              result="ERROR", error=str(exc)[:120])
-        return []
+        return ()
 
 
 def fetch_faction_name(faction_id: int) -> Optional[str]:
+    """Cached wrapper — see _cached_fetch_faction_name."""
+    return _cached_fetch_faction_name(faction_id)
+
+
+@lru_cache(maxsize=1024)
+def _cached_fetch_faction_name(faction_id: int) -> Optional[str]:
     """Return the Hebrew name of a faction by its ID. None on miss / error."""
     url = f"{_base_url()}/KNS_Faction({faction_id})?$format=json"
     try:

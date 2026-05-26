@@ -69,8 +69,9 @@ class Catalog(BaseModel):
 _DATA_DIR = Path(__file__).parent / "data" / "il_entities"
 
 _CATEGORY_FILES = {
-    "municipality": "municipalities.json",
-    "ministry":     "ministries.json",
+    "municipality":    "municipalities.json",
+    "ministry":        "ministries.json",
+    "knesset_member":  "knesset_members.json",
 }
 
 

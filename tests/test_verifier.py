@@ -1,7 +1,57 @@
 """Tests for research_agent.verifier — consensus + confidence logic."""
 import pytest
 from research_agent.models import ColumnPlan, ExtractionResult
-from research_agent.verifier import verify_field, _is_preferred
+from research_agent.verifier import (
+    verify_field, _is_preferred, _is_structured_authoritative,
+)
+
+
+# ── _is_structured_authoritative ──────────────────────────────────────────────
+
+def test_structured_authoritative_knesset():
+    assert _is_structured_authoritative("knesset.gov.il")
+    assert _is_structured_authoritative("www.knesset.gov.il")
+
+
+def test_structured_authoritative_wikidata():
+    assert _is_structured_authoritative("wikidata.org")
+    assert _is_structured_authoritative("www.wikidata.org")
+
+
+def test_structured_authoritative_negative():
+    assert not _is_structured_authoritative("example.com")
+    assert not _is_structured_authoritative("wikipedia.org")
+    assert not _is_structured_authoritative("")
+    assert not _is_structured_authoritative("notknesset.gov.il")
+
+
+# ── Single-source structured-authoritative override ───────────────────────────
+
+def test_knesset_single_source_promotes_low_to_high():
+    """One hit from knesset.gov.il is HIGH even with min_corroborations=2."""
+    field = make_field(min_corroborations=2)
+    ext = make_extraction(value="הליכוד", domain="knesset.gov.il")
+    cell = verify_field(field, [ext])
+    assert cell.confidence == "HIGH"
+    assert "structured_authoritative_source" in cell.flags
+    assert not any(f.startswith("below_min_corroborations") for f in cell.flags)
+
+
+def test_wikidata_single_source_promotes_low_to_high():
+    field = make_field(min_corroborations=2)
+    ext = make_extraction(value="https://example.gov.il", domain="www.wikidata.org")
+    cell = verify_field(field, [ext])
+    assert cell.confidence == "HIGH"
+    assert "structured_authoritative_source" in cell.flags
+
+
+def test_regular_domain_does_not_get_structured_promotion():
+    """No promotion for non-structured sources — must use normal corroboration."""
+    field = make_field(min_corroborations=2)
+    ext = make_extraction(value="הליכוד", domain="he.wikipedia.org")
+    cell = verify_field(field, [ext])
+    assert cell.confidence == "LOW"
+    assert any(f.startswith("below_min_corroborations") for f in cell.flags)
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────

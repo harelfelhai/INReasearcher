@@ -20,6 +20,25 @@ from .models import ColumnPlan, ExtractionResult, VerifiedCell
 from .hebrew_utils import normalize_hebrew
 
 
+# Domains that serve STRUCTURED OFFICIAL data — not free text extracted by an
+# LLM, but typed records from an authoritative API (KNS_Person rows, Wikidata
+# claim values, etc.). A single hit from one of these is enough to bypass the
+# multi-source corroboration requirement: there is no second-source we trust
+# more than the source itself.
+_STRUCTURED_AUTHORITATIVE_DOMAINS: tuple[str, ...] = (
+    "knesset.gov.il",   # Knesset OData (research_agent/knesset_odata.py)
+    "wikidata.org",     # Wikidata structured properties (P6, P856, ...)
+)
+
+
+def _is_structured_authoritative(domain: str) -> bool:
+    """True if the domain is a structured-data API we trust as a single source."""
+    if not domain:
+        return False
+    d = domain.lower().removeprefix("www.")
+    return any(d == a or d.endswith("." + a) for a in _STRUCTURED_AUTHORITATIVE_DOMAINS)
+
+
 def _is_preferred(domain: str, preferred: list[str]) -> bool:
     """
     Match a result domain against the compiler's preferred-domain list
@@ -116,6 +135,21 @@ def verify_field(
     if confidence == "MEDIUM" and has_preferred:
         confidence = "HIGH"
         flags.append("preferred_source_boost")
+
+    # Structured-authoritative override: a single hit from a hard-coded
+    # structured-data API (Knesset OData, Wikidata) is by definition a
+    # gold-standard source — no cross-domain corroboration needed. Drop the
+    # below_min_corroborations flag if present, because corroboration is
+    # not relevant for these sources.
+    has_structured = any(
+        _is_structured_authoritative(d)
+        for d, v in domain_to_norm_value.items()
+        if v == top_norm_value
+    )
+    if has_structured and confidence == "LOW":
+        confidence = "HIGH"
+        flags = [f for f in flags if not f.startswith("below_min_corroborations")]
+        flags.append("structured_authoritative_source")
 
     primary_source = {
         "url": best.source_url,
