@@ -48,6 +48,7 @@ from research_agent.compiler import (
 )
 from research_agent.extractor import (
     search_and_extract_batched,
+    search_and_extract_cross_entity,
     probe_field_list,
     verify_probe_extraction,
     discover_entities,
@@ -388,23 +389,29 @@ def api_run(
                         })
                 await asyncio.sleep(0)
 
-            # ── Phase 1: Entity loop (three lanes) ───────────────────────────
+            # ── Phase 1: three lanes (Lane 1 per-entity, Lanes 2/3 cross-entity) ──
+            #
+            # Lane 1 (probe verification) stays per-entity — each call uses
+            # the entity-specific found value as a query anchor, no shared work
+            # to batch.
+            #
+            # Lanes 2 and 3 run cross-entity now: ONE search per (entity, field),
+            # then a single Claude call per unique URL covering every pair that
+            # surfaced it. Tier 1 processes ranks 1-3 + direct fetches; tier 2
+            # processes ranks 4-6 only for pairs still without a grounded value.
             for entity in entities:
                 yield _sse("entity_start", {"entity": entity})
-                resolved: dict[str, str] = {}
-                cells: dict = {}
 
-                def _emit_field_result(fid: str):
-                    return _sse("field_result", {
-                        "entity": entity,
-                        "field_id": fid,
-                        "cell": cells[fid].model_dump(),
-                    })
+            cells_by_entity: dict[str, dict] = {entity: {} for entity in entities}
+            resolved_by_entity: dict[str, dict[str, str]] = {
+                entity: {} for entity in entities
+            }
 
-                # Lane 1 — probe-covered.
-                probe_handled: set[str] = set()
+            # ── Lane 1: probe-covered fields (per-entity verify) ───────────
+            probe_field_ids = set(probe_results.keys())
+            for entity in entities:
                 for field in plan.columns:
-                    if field.depends_on or field.id not in probe_results:
+                    if field.depends_on or field.id not in probe_field_ids:
                         continue
                     probe_hit = probe_results[field.id].get(entity)
                     if not (probe_hit and probe_hit.value):
@@ -413,54 +420,80 @@ def api_run(
                         field, entity, probe_hit, search, claude,
                     )
                     cell = verify_field(field, [probe_hit] + extras)
-                    cells[field.id] = cell
+                    cells_by_entity[entity][field.id] = cell
                     if cell.value:
-                        resolved[field.id] = cell.value
-                    probe_handled.add(field.id)
-                    yield _emit_field_result(field.id)
+                        resolved_by_entity[entity][field.id] = cell.value
+                    yield _sse("field_result", {
+                        "entity": entity, "field_id": field.id,
+                        "cell": cell.model_dump(),
+                    })
                     await asyncio.sleep(0)
 
-                # Lane 2 — non-deferred fields not handled by probe: batched.
-                lane2_fields = [
-                    f for f in plan.columns
-                    if not f.depends_on and f.id not in probe_handled
-                ]
-                deferred = [f for f in plan.columns if f.depends_on]
+            # ── Lane 2: cross-entity batched for non-deferred, non-probe ───
+            lane2_fields = [
+                f for f in plan.columns
+                if not f.depends_on and f.id not in probe_field_ids
+            ]
+            deferred = [f for f in plan.columns if f.depends_on]
 
-                if lane2_fields:
-                    batched = search_and_extract_batched(
-                        fields=lane2_fields, entity=entity,
-                        resolved_deps=resolved, tavily=search,
-                        claude=claude, memory=None,
-                    )
+            if lane2_fields:
+                yield _sse("phase_start", {
+                    "phase": "lane2",
+                    "fields": len(lane2_fields),
+                    "entities": len(entities),
+                })
+                cross = search_and_extract_cross_entity(
+                    fields=lane2_fields, entities=entities,
+                    resolved_deps_per_entity=resolved_by_entity,
+                    search_client=search, claude=claude,
+                )
+                for entity in entities:
                     for f in lane2_fields:
-                        cell = verify_field(f, batched.get(f.id, []))
-                        cells[f.id] = cell
+                        cell = verify_field(f, cross[entity].get(f.id, []))
+                        cells_by_entity[entity][f.id] = cell
                         if cell.value:
-                            resolved[f.id] = cell.value
-                        yield _emit_field_result(f.id)
+                            resolved_by_entity[entity][f.id] = cell.value
+                        yield _sse("field_result", {
+                            "entity": entity, "field_id": f.id,
+                            "cell": cell.model_dump(),
+                        })
                         await asyncio.sleep(0)
 
-                # Lane 3 — deferred fields.
-                if deferred:
+            # ── Lane 3: deferred fields, cross-entity ──────────────────────
+            if deferred:
+                for entity in entities:
                     for f in deferred:
-                        if f.depends_on and f.depends_on not in resolved:
-                            resolved[f.depends_on] = entity
-                    batched_def = search_and_extract_batched(
-                        fields=deferred, entity=entity,
-                        resolved_deps=resolved, tavily=search,
-                        claude=claude, memory=None,
-                    )
+                        if f.depends_on and f.depends_on not in resolved_by_entity[entity]:
+                            resolved_by_entity[entity][f.depends_on] = entity
+                yield _sse("phase_start", {
+                    "phase": "lane3",
+                    "fields": len(deferred),
+                    "entities": len(entities),
+                })
+                cross_def = search_and_extract_cross_entity(
+                    fields=deferred, entities=entities,
+                    resolved_deps_per_entity=resolved_by_entity,
+                    search_client=search, claude=claude,
+                )
+                for entity in entities:
                     for f in deferred:
-                        cell = verify_field(f, batched_def.get(f.id, []))
-                        cells[f.id] = cell
+                        cell = verify_field(f, cross_def[entity].get(f.id, []))
+                        cells_by_entity[entity][f.id] = cell
                         if cell.value:
-                            resolved[f.id] = cell.value
-                        yield _emit_field_result(f.id)
+                            resolved_by_entity[entity][f.id] = cell.value
+                        yield _sse("field_result", {
+                            "entity": entity, "field_id": f.id,
+                            "cell": cell.model_dump(),
+                        })
                         await asyncio.sleep(0)
 
+            # ── Emit entity_done after all lanes complete ─────────────────
+            for entity in entities:
+                cells = cells_by_entity[entity]
                 row_flags = []
-                not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")
+                not_found = sum(
+                    1 for c in cells.values() if c.confidence == "NOT_FOUND"
+                )
                 if cells and not_found > len(cells) // 2:
                     row_flags.append("majority_not_found")
 
@@ -472,6 +505,7 @@ def api_run(
                     "cells": {k: v.model_dump() for k, v in cells.items()},
                     "row_flags": row_flags,
                 })
+                await asyncio.sleep(0)
 
         except Exception as exc:
             print(f"\n[error] /api/run stream failed →", file=sys.stderr)

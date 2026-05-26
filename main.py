@@ -36,6 +36,7 @@ from research_agent.compiler import (
 from research_agent.extractor import (
     search_and_extract, search_and_extract_batched,
     probe_field_list, verify_probe_extraction,
+    search_and_extract_cross_entity,
     MockTavilyClient, DuckDuckGoClient,
     WikipediaSearchClient, GoogleSearchClient, SerpApiClient,
 )
@@ -310,6 +311,101 @@ def research_entity(
         row_flags.append("majority_not_found")
 
     return EntityResult(entity_name=entity, cells=cells, row_flags=row_flags)
+
+
+def research_entities_batch(
+    entities: list[str],
+    plan: ResearchPlan,
+    tavily: TavilyClient,
+    claude: anthropic.Anthropic,
+    memory: SuccessMemory | None = None,
+    verbose: bool = False,
+    probe_results: dict | None = None,
+) -> list[EntityResult]:
+    """
+    Cross-entity batched pipeline. Lane 1 runs per-entity (probe verify);
+    Lanes 2 + 3 run as cross-entity passes — one search per (entity, field),
+    one Claude call per unique URL covering every pair that surfaced it.
+    """
+    probe_results = probe_results or {}
+    probe_field_ids = set(probe_results.keys())
+
+    cells_by_entity: dict[str, dict] = {e: {} for e in entities}
+    resolved_by_entity: dict[str, dict[str, str]] = {e: {} for e in entities}
+
+    # Lane 1 — probe-covered fields, per-entity verification.
+    for entity in entities:
+        print(f"\n[entity] {entity}", file=sys.stderr)
+        for field in plan.columns:
+            if field.depends_on or field.id not in probe_field_ids:
+                continue
+            probe_hit = probe_results[field.id].get(entity)
+            if not (probe_hit and probe_hit.value):
+                continue
+            print(f"  [field] {field.id} ({field.label_he}) — probe hit, verifying",
+                  file=sys.stderr)
+            extras = verify_probe_extraction(field, entity, probe_hit, tavily, claude)
+            cell = verify_field(field, [probe_hit] + extras)
+            cells_by_entity[entity][field.id] = cell
+            if cell.value:
+                resolved_by_entity[entity][field.id] = cell.value
+            mark = "✓" if cell.value else "✗"
+            shown = (cell.value or "NOT_FOUND")[:60]
+            print(f"    → {mark} {shown} [{cell.confidence}/probe+{len(extras)}]",
+                  file=sys.stderr)
+
+    # Lane 2 — cross-entity batched.
+    lane2 = [f for f in plan.columns
+             if not f.depends_on and f.id not in probe_field_ids]
+    deferred = [f for f in plan.columns if f.depends_on]
+
+    if lane2:
+        print(f"\n[lane-2] cross-entity batched for {len(lane2)} field(s) × "
+              f"{len(entities)} entity(s)", file=sys.stderr)
+        cross = search_and_extract_cross_entity(
+            fields=lane2, entities=entities,
+            resolved_deps_per_entity=resolved_by_entity,
+            search_client=tavily, claude=claude,
+        )
+        for entity in entities:
+            for f in lane2:
+                cell = verify_field(f, cross[entity].get(f.id, []))
+                cells_by_entity[entity][f.id] = cell
+                if cell.value:
+                    resolved_by_entity[entity][f.id] = cell.value
+
+    # Lane 3 — deferred, cross-entity.
+    if deferred:
+        for entity in entities:
+            for f in deferred:
+                if f.depends_on and f.depends_on not in resolved_by_entity[entity]:
+                    resolved_by_entity[entity][f.depends_on] = entity
+        print(f"\n[lane-3] cross-entity batched for {len(deferred)} deferred field(s)",
+              file=sys.stderr)
+        cross_def = search_and_extract_cross_entity(
+            fields=deferred, entities=entities,
+            resolved_deps_per_entity=resolved_by_entity,
+            search_client=tavily, claude=claude,
+        )
+        for entity in entities:
+            for f in deferred:
+                cell = verify_field(f, cross_def[entity].get(f.id, []))
+                cells_by_entity[entity][f.id] = cell
+                if cell.value:
+                    resolved_by_entity[entity][f.id] = cell.value
+
+    # Assemble EntityResult per entity with row_flags.
+    out: list[EntityResult] = []
+    for entity in entities:
+        cells = cells_by_entity[entity]
+        row_flags = []
+        not_found = sum(1 for c in cells.values() if c.confidence == "NOT_FOUND")
+        if cells and not_found > len(cells) // 2:
+            row_flags.append("majority_not_found")
+        out.append(EntityResult(
+            entity_name=entity, cells=cells, row_flags=row_flags,
+        ))
+    return out
 
 
 # ── Interactive Review (Success Memory feedback loop) ────────────────────────
@@ -646,9 +742,10 @@ def main() -> None:
     preview_n = min(2, len(entities))
     probe_data = _run_probes(plan)
 
-    for entity in entities[:preview_n]:
-        results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
-                                       probe_results=probe_data))
+    results.extend(research_entities_batch(
+        entities[:preview_n], plan, tavily, claude, memory, args.verbose,
+        probe_results=probe_data,
+    ))
 
     if interactive and len(entities) > preview_n:
         _print_real_preview(results, plan)
@@ -664,21 +761,24 @@ def main() -> None:
             plan = enrich_with_queries(plan, claude)
             _show_plan(plan)
             probe_data = _run_probes(plan)
-            results = []
-            for entity in entities[:preview_n]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
-                                               probe_results=probe_data))
-            for entity in entities[preview_n:]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
-                                               probe_results=probe_data))
+            results = list(research_entities_batch(
+                entities[:preview_n], plan, tavily, claude, memory, args.verbose,
+                probe_results=probe_data,
+            ))
+            results.extend(research_entities_batch(
+                entities[preview_n:], plan, tavily, claude, memory, args.verbose,
+                probe_results=probe_data,
+            ))
         else:  # 'y'
-            for entity in entities[preview_n:]:
-                results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
-                                               probe_results=probe_data))
+            results.extend(research_entities_batch(
+                entities[preview_n:], plan, tavily, claude, memory, args.verbose,
+                probe_results=probe_data,
+            ))
     else:
-        for entity in entities[preview_n:]:
-            results.append(research_entity(entity, plan, tavily, claude, memory, args.verbose,
-                                           probe_results=probe_data))
+        results.extend(research_entities_batch(
+            entities[preview_n:], plan, tavily, claude, memory, args.verbose,
+            probe_results=probe_data,
+        ))
 
     # ── Output ────────────────────────────────────────────────────────────────
     write_csv(results, args.output_csv, plan.columns)

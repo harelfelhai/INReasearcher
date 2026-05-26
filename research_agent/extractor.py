@@ -1393,6 +1393,367 @@ def search_and_extract_batched(
     return results
 
 
+# ── Cross-entity batched extract (one Claude call per shared page) ───────────
+#
+# Used by the cross-entity orchestrator below: when the same URL is requested
+# by multiple (entity, field) pairs (different entities, possibly different
+# fields), we send ALL those pairs in ONE Claude call instead of one per pair.
+
+_MAX_PAIRS_PER_CROSS_CALL = 20  # chunk size to keep output_tokens within 4096
+
+_CROSS_ENTITY_TOOL = {
+    "name": "extract_cross_entity",
+    "description": (
+        "Extract values for many (entity, field) pairs from one source page. "
+        "Return exactly one extraction object per requested pair_id."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "extractions": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "pair_id": {
+                            "type": "string",
+                            "description": "Echo the pair_id from the request exactly.",
+                        },
+                        "value": {"type": ["string", "null"]},
+                        "quote_original": {"type": ["string", "null"]},
+                        "confidence": {
+                            "type": "number", "minimum": 0.0, "maximum": 1.0,
+                        },
+                    },
+                    "required": ["pair_id", "value", "quote_original", "confidence"],
+                },
+            },
+        },
+        "required": ["extractions"],
+    },
+}
+
+_CROSS_ENTITY_SYSTEM = """\
+You extract field values for MANY (entity, field) pairs from ONE source page.
+
+For EACH pair in the requested list, find the value if it appears in the source.
+All grounding rules apply, per pair:
+
+  1. Return a value ONLY if explicitly in the text. No inference, no background knowledge.
+  2. quote_original must be a direct verbatim copy-paste from the source.
+  3. Return null for pairs not found — a confident null beats a hallucinated value.
+  4. Match entity specificity — value must refer to that pair's entity, not any other.
+  5. Match temporal constraints strictly when the field has a year/period.
+  6. Return EXACTLY one extraction object per requested pair_id — no additions, no omissions."""
+
+
+def _cross_entity_single_call(
+    pairs: list[tuple[str, ColumnPlan]],
+    source_url: str,
+    source_content: str,
+    client: anthropic.Anthropic,
+) -> dict[tuple[str, str], ExtractionResult]:
+    pair_ids = [f"p{i}" for i in range(len(pairs))]
+    pair_lookup = {pid: pair for pid, pair in zip(pair_ids, pairs)}
+
+    lines = []
+    for pid, (entity, field) in zip(pair_ids, pairs):
+        anchor = (
+            f" (must be valid for {field.temporal_anchor!r})"
+            if field.temporal_anchor else ""
+        )
+        lines.append(
+            f"  - pair_id={pid!r}: entity={entity!r}, "
+            f"field={field.label_en!r} / {field.label_he!r} "
+            f"[type={field.type}]{anchor}"
+        )
+    pairs_block = "\n".join(lines)
+
+    # No per-entity windowing — page is shared across entities. Truncate to budget.
+    user_prompt = (
+        f"Pairs to extract ({len(pairs)}):\n{pairs_block}\n\n"
+        f"Source URL: {source_url}\n"
+        f"Source text:\n---\n{source_content[:_BUDGET]}\n---\n\n"
+        f"For EACH pair, extract that entity's field value from the text. "
+        f"Return exactly {len(pairs)} extraction objects — one per pair_id."
+    )
+
+    max_tokens = min(4096, 256 + 150 * len(pairs))
+    response = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=max_tokens,
+        system=_CROSS_ENTITY_SYSTEM,
+        tools=[_CROSS_ENTITY_TOOL],
+        tool_choice={"type": "any"},
+        messages=[{"role": "user", "content": user_prompt}],
+    )
+    tool_block = next(b for b in response.content if b.type == "tool_use")
+    extractions_raw = tool_block.input.get("extractions", [])
+
+    results: dict[tuple[str, str], ExtractionResult] = {}
+    for ext in extractions_raw:
+        pid = ext.get("pair_id", "")
+        if pid not in pair_lookup:
+            continue
+        entity, field = pair_lookup[pid]
+        raw_value = ext.get("value")
+        raw_quote = ext.get("quote_original")
+        confidence = float(ext.get("confidence", 0.0))
+
+        grounded = False
+        verified_quote = None
+        if raw_value and raw_quote:
+            grounded, verified_quote = is_grounded(raw_quote, source_content)
+            if not grounded:
+                grounded, verified_quote = is_grounded(raw_value, source_content)
+        elif raw_value:
+            grounded, verified_quote = is_grounded(raw_value, source_content)
+
+        results[(entity, field.id)] = ExtractionResult(
+            field_id=field.id,
+            value=raw_value if grounded else None,
+            quote_original=verified_quote if grounded else None,
+            source_url=source_url,
+            source_domain=_domain(source_url),
+            is_grounded=grounded,
+            extractor_confidence=confidence if grounded else 0.0,
+        )
+
+    # Fill in any pair the LLM forgot to return.
+    for (entity, field) in pairs:
+        key = (entity, field.id)
+        if key not in results:
+            results[key] = ExtractionResult(
+                field_id=field.id,
+                value=None, quote_original=None,
+                source_url=source_url, source_domain=_domain(source_url),
+                is_grounded=False, extractor_confidence=0.0,
+            )
+    return results
+
+
+def cross_entity_extract_from_source(
+    pairs: list[tuple[str, ColumnPlan]],
+    source_url: str,
+    source_content: str,
+    client: anthropic.Anthropic,
+) -> dict[tuple[str, str], ExtractionResult]:
+    """
+    Extract values for many (entity, field) pairs from one page.
+
+    Chunks the pair list to keep output_tokens within model limits — large
+    directory pages with N entities × K fields can easily exceed a single
+    call's budget, so we split into batches of _MAX_PAIRS_PER_CROSS_CALL.
+    """
+    if not pairs:
+        return {}
+    if len(pairs) <= _MAX_PAIRS_PER_CROSS_CALL:
+        return _cross_entity_single_call(pairs, source_url, source_content, client)
+
+    merged: dict[tuple[str, str], ExtractionResult] = {}
+    for start in range(0, len(pairs), _MAX_PAIRS_PER_CROSS_CALL):
+        chunk = pairs[start:start + _MAX_PAIRS_PER_CROSS_CALL]
+        merged.update(
+            _cross_entity_single_call(chunk, source_url, source_content, client)
+        )
+    return merged
+
+
+# ── Cross-entity orchestrator (Lane 2 / Lane 3 replacement) ──────────────────
+#
+# New flow per user spec (replaces per-entity search_and_extract_batched):
+#
+#   Stage A — for each (entity, field): ONE search query → 6 ranked URLs.
+#             Wikipedia direct-fetch + Wikidata injection still apply (they are
+#             not generic search engine calls — kept as cheap, high-precision
+#             lookups outside the "one search per pair" rule).
+#
+#   Stage B (tier 1) — dedupe URLs across all (entity, field) pairs from
+#             direct-pages + ranks 1-3. ONE Claude call per unique URL,
+#             covering every pair that surfaced it.
+#
+#   Stage C (tier 2 fallback) — for (entity, field) pairs still without a
+#             grounded value, expand to ranks 4-6 and run the same dedup pass.
+
+def _gather_ranked_pages_for_field(
+    field: ColumnPlan,
+    entity: str,
+    resolved_deps: dict,
+    search_client,
+    n_results: int = 6,
+) -> tuple[list[tuple[str, str]], list[ExtractionResult], list[tuple[str, str]]]:
+    """
+    Returns:
+      direct_pages: pages from Wikipedia direct-fetch (no rank — always processed).
+      wikidata_results: pre-built ExtractionResults from Wikidata.
+      ranked_pages: (url, content) tuples from ONE generic search query,
+        ordered by search result rank (most relevant first), up to n_results.
+    """
+    seen_urls: set[str] = set()
+    direct_pages: list[tuple[str, str]] = []
+    wikidata_results: list[ExtractionResult] = []
+    ranked_pages: list[tuple[str, str]] = []
+
+    is_wikipedia_client = isinstance(search_client, WikipediaSearchClient)
+
+    # 1. Wikipedia direct-fetch + Wikidata structured lookup (kept as-is).
+    if is_wikipedia_client:
+        extra = []
+        if field.type == "person_name" and field.temporal_anchor:
+            extra.append(f"ראשי עיר {entity}")
+        direct = search_client.fetch_entity_article(entity, extra_titles=extra)
+
+        if field.type in ("url", "person_name"):
+            canonical = (
+                direct["results"][0]["title"]
+                if direct.get("results") else entity
+            )
+            _inject_wikidata(canonical, field, wikidata_results, seen_urls)
+
+        for hit in direct.get("results", []):
+            url = hit.get("url", "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                content = hit.get("raw_content") or hit.get("content", "")
+                if content and len(content) >= 80:
+                    direct_pages.append((url, content))
+
+    # 2. ONE generic search query — Hebrew preferred, English as fallback.
+    queries_he = [q.replace("{entity}", entity) for q in field.search_queries_he]
+    queries_en = [q.replace("{entity}", entity) for q in field.search_queries_en]
+
+    if field.depends_on and field.depends_on in resolved_deps:
+        dep_val = resolved_deps[field.depends_on]
+        if dep_val and queries_he:
+            queries_he = [queries_he[0].replace("{entity}", dep_val)] + queries_he
+
+    query = queries_he[0] if queries_he else (queries_en[0] if queries_en else None)
+    if not query:
+        return direct_pages, wikidata_results, ranked_pages
+
+    try:
+        response = search_client.search(
+            query=query, max_results=n_results, include_raw_content=True,
+        )
+    except Exception as exc:
+        print(f"    [search error] {query[:60]!r}: {exc}")
+        return direct_pages, wikidata_results, ranked_pages
+
+    hits = response.get("results", [])
+    if hits:
+        print(
+            f"    [search] entity={entity!r} field={field.id!r} "
+            f"q={query[:55]!r} → {len(hits)} result(s)"
+        )
+    for hit in hits:
+        url = hit.get("url", "")
+        if not url or url in seen_urls:
+            continue
+        seen_urls.add(url)
+        content = hit.get("raw_content") or hit.get("content", "")
+        if not content or len(content) < 80:
+            continue
+        ranked_pages.append((url, content))
+
+    return direct_pages, wikidata_results, ranked_pages
+
+
+def search_and_extract_cross_entity(
+    fields: list[ColumnPlan],
+    entities: list[str],
+    resolved_deps_per_entity: dict[str, dict],
+    search_client,
+    claude: anthropic.Anthropic,
+    n_results_per_search: int = 6,
+    tier_1_top_n: int = 3,
+) -> dict[str, dict[str, list[ExtractionResult]]]:
+    """
+    Cross-entity batched search + extract. Replaces the per-entity loop's
+    Lane 2 (and Lane 3, when called with deps resolved) with shared URL
+    extraction across entities.
+
+    Returns {entity → {field_id → list[ExtractionResult]}}.
+    """
+    if not fields or not entities:
+        return {entity: {f.id: [] for f in fields} for entity in entities}
+
+    results: dict[str, dict[str, list[ExtractionResult]]] = {
+        entity: {f.id: [] for f in fields} for entity in entities
+    }
+    fields_by_id = {f.id: f for f in fields}
+
+    # Stage A — gather pages per (entity, field).
+    direct_queue: dict[str, list[tuple[str, ColumnPlan]]] = {}
+    direct_content: dict[str, str] = {}
+    tier_1_queue: dict[str, list[tuple[str, ColumnPlan]]] = {}
+    tier_1_content: dict[str, str] = {}
+    tier_2_by_pair: dict[tuple[str, str], list[tuple[str, str]]] = {}
+
+    for entity in entities:
+        resolved = resolved_deps_per_entity.get(entity, {})
+        for field in fields:
+            direct_pages, wikidata_results, ranked_pages = (
+                _gather_ranked_pages_for_field(
+                    field, entity, resolved, search_client,
+                    n_results=n_results_per_search,
+                )
+            )
+            results[entity][field.id].extend(wikidata_results)
+
+            for url, content in direct_pages:
+                direct_content.setdefault(url, content)
+                direct_queue.setdefault(url, []).append((entity, field))
+
+            for rank_idx, (url, content) in enumerate(ranked_pages):
+                if rank_idx < tier_1_top_n:
+                    tier_1_content.setdefault(url, content)
+                    tier_1_queue.setdefault(url, []).append((entity, field))
+                else:
+                    tier_2_by_pair.setdefault(
+                        (entity, field.id), []
+                    ).append((url, content))
+
+    # Stage B — Tier 1 extraction (direct pages first, then ranks 1-3).
+    def _run_pass(url_to_content, url_to_pairs, label):
+        for url, pairs in url_to_pairs.items():
+            content = url_to_content[url]
+            print(f"    [{label}] url={url[:70]!r}: {len(pairs)} pair(s)")
+            extracted = cross_entity_extract_from_source(
+                pairs=pairs,
+                source_url=url, source_content=content,
+                client=claude,
+            )
+            for (entity, field_id), extraction in extracted.items():
+                if extraction.is_grounded and extraction.value:
+                    results[entity][field_id].append(extraction)
+
+    if direct_queue:
+        _run_pass(direct_content, direct_queue, "tier-direct")
+    if tier_1_queue:
+        _run_pass(tier_1_content, tier_1_queue, "tier-1")
+
+    # Stage C — Tier 2 fallback for pairs still without any grounded value.
+    tier_2_content: dict[str, str] = {}
+    tier_2_queue: dict[str, list[tuple[str, ColumnPlan]]] = {}
+    for (entity, field_id), urls in tier_2_by_pair.items():
+        if results[entity][field_id]:
+            continue
+        field = fields_by_id[field_id]
+        for url, content in urls:
+            tier_2_content.setdefault(url, content)
+            tier_2_queue.setdefault(url, []).append((entity, field))
+
+    if tier_2_queue:
+        n_pairs = sum(len(p) for p in tier_2_queue.values())
+        print(
+            f"    [tier-2] {n_pairs} fallback pair(s) "
+            f"across {len(tier_2_queue)} URL(s)"
+        )
+        _run_pass(tier_2_content, tier_2_queue, "tier-2")
+
+    return results
+
+
 def _domain(url: str) -> str:
     m = re.search(r'https?://([^/]+)', url)
     return m.group(1) if m else url

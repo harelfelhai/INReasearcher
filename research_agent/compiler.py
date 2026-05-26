@@ -291,12 +291,22 @@ _QUERIES_TOOL = {
                         "search_queries_he": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "3-5 Hebrew queries with {entity} placeholder",
+                            "minItems": 1,
+                            "maxItems": 1,
+                            "description": (
+                                "EXACTLY ONE Hebrew query with {entity} placeholder. "
+                                "Pick the single best one a researcher would type."
+                            ),
                         },
                         "search_queries_en": {
                             "type": "array",
                             "items": {"type": "string"},
-                            "description": "2-3 English queries with {entity} placeholder",
+                            "minItems": 1,
+                            "maxItems": 1,
+                            "description": (
+                                "EXACTLY ONE English query with {entity} placeholder. "
+                                "Used only as fallback when Hebrew returns nothing."
+                            ),
                         },
                         "preferred_source_domains": {
                             "type": "array",
@@ -374,8 +384,10 @@ it (court records / regulatory filings / encyclopedias / government domains /
 query. Do not default to a stock list.
 
 ═══ Query rules ═══
-  - {entity} placeholder is required.
-  - Hebrew queries primary for Israeli topics; English primary for global.
+  - EXACTLY ONE Hebrew query and EXACTLY ONE English query per field.
+    Pick the single best phrasing a real researcher would type to find
+    the field's value for a given entity.
+  - {entity} placeholder is required in both.
   - For historical fields, embed the year directly.
   - For person fields, include role + period to prevent disambiguation.
   - Write queries the way a real researcher would type — natural, not
