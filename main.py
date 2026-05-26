@@ -344,7 +344,10 @@ def research_entities_batch(
                 continue
             print(f"  [field] {field.id} ({field.label_he}) — probe hit, verifying",
                   file=sys.stderr)
-            extras = verify_probe_extraction(field, entity, probe_hit, tavily, claude)
+            extras = verify_probe_extraction(
+                field, entity, probe_hit, tavily, claude,
+                entity_type=plan.entity_type,
+            )
             cell = verify_field(field, [probe_hit] + extras)
             cells_by_entity[entity][field.id] = cell
             if cell.value:
@@ -366,6 +369,7 @@ def research_entities_batch(
             fields=lane2, entities=entities,
             resolved_deps_per_entity=resolved_by_entity,
             search_client=tavily, claude=claude,
+            entity_type=plan.entity_type,
         )
         for entity in entities:
             for f in lane2:
@@ -386,6 +390,7 @@ def research_entities_batch(
             fields=deferred, entities=entities,
             resolved_deps_per_entity=resolved_by_entity,
             search_client=tavily, claude=claude,
+            entity_type=plan.entity_type,
         )
         for entity in entities:
             for f in deferred:

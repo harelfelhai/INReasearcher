@@ -25,6 +25,7 @@ from tavily import TavilyClient
 
 from .models import ColumnPlan, ExtractionResult
 from .hebrew_utils import is_grounded
+from .il_catalog import normalize_entity_for_search
 from .memory import (
     SuccessMemory,
     format_extraction_examples,
@@ -747,6 +748,7 @@ def verify_probe_extraction(
     probe_extraction: ExtractionResult,
     search_client,
     claude: anthropic.Anthropic,
+    entity_type: str | None = None,
 ) -> list[ExtractionResult]:
     """
     When the probe found a value for (field, entity), run ONE focused search
@@ -762,17 +764,27 @@ def verify_probe_extraction(
     Returns 0-2 additional ExtractionResult objects. The caller combines
     these with the probe extraction and passes the merged list to
     verify_field, which handles corroboration_count and confidence.
+
+    `entity_type` (optional): when given, looks up `entity` in the IL catalog
+    and uses the canonical Hebrew form in the verification query (improves
+    recall for cases like 'תל אביב' → 'תל אביב-יפו').
     """
     value = probe_extraction.value
     if not value:
         return []
+
+    # Canonicalize for query-building only — the dict key / return shape
+    # is unaffected. Catalog miss → uses entity verbatim.
+    search_entity, _aliases = normalize_entity_for_search(
+        entity, entity_type=entity_type,
+    )
 
     # Build a high-precision query: the found value is the anchor.
     # For URL fields the URL itself is unique enough — no need to add context.
     if field.type == "url":
         query = value
     else:
-        query = f'"{value}" {entity}'
+        query = f'"{value}" {search_entity}'
         if field.temporal_anchor:
             query += f" {field.temporal_anchor}"
 
@@ -1581,6 +1593,7 @@ def _gather_ranked_pages_for_field(
     resolved_deps: dict,
     search_client,
     n_results: int = 6,
+    entity_type: str | None = None,
 ) -> tuple[list[tuple[str, str]], list[ExtractionResult], list[tuple[str, str]]]:
     """
     Returns:
@@ -1588,11 +1601,30 @@ def _gather_ranked_pages_for_field(
       wikidata_results: pre-built ExtractionResults from Wikidata.
       ranked_pages: (url, content) tuples from ONE generic search query,
         ordered by search result rank (most relevant first), up to n_results.
+
+    `entity` is preserved as-is for return-value attribution. Internally we
+    look up `entity` in the IL catalog (when `entity_type` matches a known
+    category) and use the canonical Hebrew form for query construction and
+    Wikipedia fetch — boosts recall for cases like 'תל אביב' → 'תל אביב-יפו'
+    (matches Wikipedia's canonical title, fixes the gap documented in
+    ARCHITECTURE.md §5). Catalog miss → falls back to `entity` verbatim.
     """
     seen_urls: set[str] = set()
     direct_pages: list[tuple[str, str]] = []
     wikidata_results: list[ExtractionResult] = []
     ranked_pages: list[tuple[str, str]] = []
+
+    # Canonicalize the entity for SEARCH-ONLY use. The dict-key entity name
+    # used by the caller (and the user-visible EntityResult.entity_name) is
+    # untouched.
+    search_entity, _aliases = normalize_entity_for_search(
+        entity, entity_type=entity_type,
+    )
+    if search_entity != entity:
+        print(
+            f"    [il_catalog] normalized for search: "
+            f"{entity!r} → {search_entity!r} (field={field.id!r})"
+        )
 
     is_wikipedia_client = isinstance(search_client, WikipediaSearchClient)
 
@@ -1600,13 +1632,13 @@ def _gather_ranked_pages_for_field(
     if is_wikipedia_client:
         extra = []
         if field.type == "person_name" and field.temporal_anchor:
-            extra.append(f"ראשי עיר {entity}")
-        direct = search_client.fetch_entity_article(entity, extra_titles=extra)
+            extra.append(f"ראשי עיר {search_entity}")
+        direct = search_client.fetch_entity_article(search_entity, extra_titles=extra)
 
         if field.type in ("url", "person_name"):
             canonical = (
                 direct["results"][0]["title"]
-                if direct.get("results") else entity
+                if direct.get("results") else search_entity
             )
             _inject_wikidata(canonical, field, wikidata_results, seen_urls)
 
@@ -1619,8 +1651,8 @@ def _gather_ranked_pages_for_field(
                     direct_pages.append((url, content))
 
     # 2. ONE generic search query — Hebrew preferred, English as fallback.
-    queries_he = [q.replace("{entity}", entity) for q in field.search_queries_he]
-    queries_en = [q.replace("{entity}", entity) for q in field.search_queries_en]
+    queries_he = [q.replace("{entity}", search_entity) for q in field.search_queries_he]
+    queries_en = [q.replace("{entity}", search_entity) for q in field.search_queries_en]
 
     if field.depends_on and field.depends_on in resolved_deps:
         dep_val = resolved_deps[field.depends_on]
@@ -1666,11 +1698,17 @@ def search_and_extract_cross_entity(
     claude: anthropic.Anthropic,
     n_results_per_search: int = 6,
     tier_1_top_n: int = 3,
+    entity_type: str | None = None,
 ) -> dict[str, dict[str, list[ExtractionResult]]]:
     """
     Cross-entity batched search + extract. Replaces the per-entity loop's
     Lane 2 (and Lane 3, when called with deps resolved) with shared URL
     extraction across entities.
+
+    `entity_type` is the ResearchPlan's entity_type string (e.g. 'ראשי ערים',
+    'cities', 'ministry'); when given, it's used to canonicalize entity names
+    against the IL catalog before building search queries — see
+    `_gather_ranked_pages_for_field` for details.
 
     Returns {entity → {field_id → list[ExtractionResult]}}.
     """
@@ -1696,6 +1734,7 @@ def search_and_extract_cross_entity(
                 _gather_ranked_pages_for_field(
                     field, entity, resolved, search_client,
                     n_results=n_results_per_search,
+                    entity_type=entity_type,
                 )
             )
             results[entity][field.id].extend(wikidata_results)

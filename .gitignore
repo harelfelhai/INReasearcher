@@ -6,9 +6,13 @@ output.csv
 output.json
 .pytest_cache/
 
-# Runtime data — local DB and per-session Excel exports
-data/
+# Runtime data — local DB and per-session Excel exports — only at repo root.
+/data/
 exports/
+
+# Curated catalog JSON lives under research_agent/data/ and must be tracked.
+!research_agent/data/
+!research_agent/data/**
 
 # Frontend build artifacts
 web/node_modules/

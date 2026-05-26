@@ -418,6 +418,7 @@ def api_run(
                         continue
                     extras = verify_probe_extraction(
                         field, entity, probe_hit, search, claude,
+                        entity_type=plan.entity_type,
                     )
                     cell = verify_field(field, [probe_hit] + extras)
                     cells_by_entity[entity][field.id] = cell
@@ -446,6 +447,7 @@ def api_run(
                     fields=lane2_fields, entities=entities,
                     resolved_deps_per_entity=resolved_by_entity,
                     search_client=search, claude=claude,
+                    entity_type=plan.entity_type,
                 )
                 for entity in entities:
                     for f in lane2_fields:
@@ -474,6 +476,7 @@ def api_run(
                     fields=deferred, entities=entities,
                     resolved_deps_per_entity=resolved_by_entity,
                     search_client=search, claude=claude,
+                    entity_type=plan.entity_type,
                 )
                 for entity in entities:
                     for f in deferred:

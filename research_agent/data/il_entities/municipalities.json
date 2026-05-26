@@ -1,0 +1,274 @@
+{
+  "category": "municipality",
+  "version": "1.0.0",
+  "source_notes": "Top ~35 Israeli municipalities by population. Hand-curated aliases cover Hebrew variants (Tel Aviv vs Tel Aviv-Yafo), hyphenation differences, common abbreviations (ת״א, ב״ש), and English transliteration variants. Wikipedia titles use Hebrew canonical forms with underscores so Wikipedia sitelink lookups hit cleanly.",
+  "category_labels_he": [
+    "עירייה",
+    "עיריות",
+    "רשות מקומית",
+    "רשויות מקומיות",
+    "עיר",
+    "ערים",
+    "ראשי ערים",
+    "ראשי עיריות",
+    "מועצה מקומית"
+  ],
+  "category_labels_en": [
+    "municipality",
+    "municipalities",
+    "city",
+    "cities",
+    "israeli city",
+    "israeli cities",
+    "mayor",
+    "mayors",
+    "local authority"
+  ],
+  "entities": [
+    {
+      "canonical_he": "ירושלים",
+      "canonical_en": "Jerusalem",
+      "aliases_he": ["ירושלם"],
+      "aliases_en": ["Jerusalem", "Yerushalayim", "Jerusalem, Israel"],
+      "wikipedia_he": "ירושלים"
+    },
+    {
+      "canonical_he": "תל אביב-יפו",
+      "canonical_en": "Tel Aviv-Yafo",
+      "aliases_he": ["תל אביב", "תל-אביב", "תל-אביב-יפו", "תל אביב יפו", "ת״א", "ת\"א", "תל-אביב יפו"],
+      "aliases_en": ["Tel Aviv", "Tel-Aviv", "Tel Aviv-Jaffa", "Tel-Aviv-Yafo"],
+      "wikipedia_he": "תל_אביב-יפו"
+    },
+    {
+      "canonical_he": "חיפה",
+      "canonical_en": "Haifa",
+      "aliases_he": [],
+      "aliases_en": ["Haifa", "Hefa"],
+      "wikipedia_he": "חיפה"
+    },
+    {
+      "canonical_he": "ראשון לציון",
+      "canonical_en": "Rishon LeZion",
+      "aliases_he": ["ראשון-לציון", "ראשל״צ", "ראשל\"צ"],
+      "aliases_en": ["Rishon LeZion", "Rishon Lezion", "Rishon Le-Zion", "Rishon Le Zion"],
+      "wikipedia_he": "ראשון_לציון"
+    },
+    {
+      "canonical_he": "פתח תקווה",
+      "canonical_en": "Petah Tikva",
+      "aliases_he": ["פתח-תקווה", "פתח תקוה", "פ״ת", "פ\"ת"],
+      "aliases_en": ["Petah Tikva", "Petach Tikva", "Petah Tiqva", "Petah-Tikva"],
+      "wikipedia_he": "פתח_תקווה"
+    },
+    {
+      "canonical_he": "אשדוד",
+      "canonical_en": "Ashdod",
+      "aliases_he": [],
+      "aliases_en": ["Ashdod"],
+      "wikipedia_he": "אשדוד"
+    },
+    {
+      "canonical_he": "נתניה",
+      "canonical_en": "Netanya",
+      "aliases_he": [],
+      "aliases_en": ["Netanya", "Netanyah", "Nethanya"],
+      "wikipedia_he": "נתניה"
+    },
+    {
+      "canonical_he": "באר שבע",
+      "canonical_en": "Be'er Sheva",
+      "aliases_he": ["באר-שבע", "ב״ש", "ב\"ש", "באר שבע"],
+      "aliases_en": ["Be'er Sheva", "Beer Sheva", "Beersheba", "Beer-Sheva"],
+      "wikipedia_he": "באר_שבע"
+    },
+    {
+      "canonical_he": "בני ברק",
+      "canonical_en": "Bnei Brak",
+      "aliases_he": ["בני-ברק"],
+      "aliases_en": ["Bnei Brak", "Bene Beraq", "Bnei-Brak"],
+      "wikipedia_he": "בני_ברק"
+    },
+    {
+      "canonical_he": "חולון",
+      "canonical_en": "Holon",
+      "aliases_he": [],
+      "aliases_en": ["Holon"],
+      "wikipedia_he": "חולון"
+    },
+    {
+      "canonical_he": "רמת גן",
+      "canonical_en": "Ramat Gan",
+      "aliases_he": ["רמת-גן", "ר״ג", "ר\"ג"],
+      "aliases_en": ["Ramat Gan", "Ramat-Gan"],
+      "wikipedia_he": "רמת_גן"
+    },
+    {
+      "canonical_he": "אשקלון",
+      "canonical_en": "Ashkelon",
+      "aliases_he": [],
+      "aliases_en": ["Ashkelon", "Ashqelon"],
+      "wikipedia_he": "אשקלון"
+    },
+    {
+      "canonical_he": "רחובות",
+      "canonical_en": "Rehovot",
+      "aliases_he": [],
+      "aliases_en": ["Rehovot", "Rechovot", "Rehoboth"],
+      "wikipedia_he": "רחובות"
+    },
+    {
+      "canonical_he": "בת ים",
+      "canonical_en": "Bat Yam",
+      "aliases_he": ["בת-ים"],
+      "aliases_en": ["Bat Yam", "Bat-Yam"],
+      "wikipedia_he": "בת_ים"
+    },
+    {
+      "canonical_he": "בית שמש",
+      "canonical_en": "Beit Shemesh",
+      "aliases_he": ["בית-שמש"],
+      "aliases_en": ["Beit Shemesh", "Bet Shemesh", "Beit-Shemesh"],
+      "wikipedia_he": "בית_שמש"
+    },
+    {
+      "canonical_he": "כפר סבא",
+      "canonical_en": "Kfar Saba",
+      "aliases_he": ["כפר-סבא"],
+      "aliases_en": ["Kfar Saba", "Kfar Sava", "Kefar Sava", "Kefar Saba"],
+      "wikipedia_he": "כפר_סבא"
+    },
+    {
+      "canonical_he": "הרצליה",
+      "canonical_en": "Herzliya",
+      "aliases_he": [],
+      "aliases_en": ["Herzliya", "Herzliyya", "Hertsliya"],
+      "wikipedia_he": "הרצליה"
+    },
+    {
+      "canonical_he": "חדרה",
+      "canonical_en": "Hadera",
+      "aliases_he": [],
+      "aliases_en": ["Hadera"],
+      "wikipedia_he": "חדרה"
+    },
+    {
+      "canonical_he": "מודיעין-מכבים-רעות",
+      "canonical_en": "Modi'in-Maccabim-Re'ut",
+      "aliases_he": ["מודיעין", "מודיעין מכבים רעות", "מודיעין מכבים-רעות"],
+      "aliases_en": ["Modi'in", "Modiin", "Modi'in-Maccabim-Reut", "Modiin-Maccabim-Reut"],
+      "wikipedia_he": "מודיעין-מכבים-רעות"
+    },
+    {
+      "canonical_he": "נצרת",
+      "canonical_en": "Nazareth",
+      "aliases_he": [],
+      "aliases_en": ["Nazareth"],
+      "wikipedia_he": "נצרת"
+    },
+    {
+      "canonical_he": "לוד",
+      "canonical_en": "Lod",
+      "aliases_he": [],
+      "aliases_en": ["Lod", "Lydda"],
+      "wikipedia_he": "לוד"
+    },
+    {
+      "canonical_he": "רמלה",
+      "canonical_en": "Ramla",
+      "aliases_he": [],
+      "aliases_en": ["Ramla", "Ramle", "Ramleh"],
+      "wikipedia_he": "רמלה"
+    },
+    {
+      "canonical_he": "רעננה",
+      "canonical_en": "Ra'anana",
+      "aliases_he": [],
+      "aliases_en": ["Ra'anana", "Raanana", "Ra'ananah"],
+      "wikipedia_he": "רעננה"
+    },
+    {
+      "canonical_he": "גבעתיים",
+      "canonical_en": "Givatayim",
+      "aliases_he": [],
+      "aliases_en": ["Givatayim", "Giv'atayim"],
+      "wikipedia_he": "גבעתיים"
+    },
+    {
+      "canonical_he": "אילת",
+      "canonical_en": "Eilat",
+      "aliases_he": [],
+      "aliases_en": ["Eilat", "Elat", "Eylat"],
+      "wikipedia_he": "אילת"
+    },
+    {
+      "canonical_he": "קריית גת",
+      "canonical_en": "Kiryat Gat",
+      "aliases_he": ["קרית גת", "קריית-גת", "קרית-גת"],
+      "aliases_en": ["Kiryat Gat", "Qiryat Gat", "Kiryat-Gat"],
+      "wikipedia_he": "קריית_גת"
+    },
+    {
+      "canonical_he": "נהריה",
+      "canonical_en": "Nahariya",
+      "aliases_he": [],
+      "aliases_en": ["Nahariya", "Nahariyya", "Naharia"],
+      "wikipedia_he": "נהריה"
+    },
+    {
+      "canonical_he": "טבריה",
+      "canonical_en": "Tiberias",
+      "aliases_he": [],
+      "aliases_en": ["Tiberias", "Tveriya"],
+      "wikipedia_he": "טבריה"
+    },
+    {
+      "canonical_he": "עכו",
+      "canonical_en": "Akko",
+      "aliases_he": [],
+      "aliases_en": ["Akko", "Acre", "Akre"],
+      "wikipedia_he": "עכו"
+    },
+    {
+      "canonical_he": "עפולה",
+      "canonical_en": "Afula",
+      "aliases_he": [],
+      "aliases_en": ["Afula", "Afulah"],
+      "wikipedia_he": "עפולה"
+    },
+    {
+      "canonical_he": "כרמיאל",
+      "canonical_en": "Karmiel",
+      "aliases_he": [],
+      "aliases_en": ["Karmiel", "Carmiel", "Karmi'el"],
+      "wikipedia_he": "כרמיאל"
+    },
+    {
+      "canonical_he": "אום אל-פחם",
+      "canonical_en": "Umm al-Fahm",
+      "aliases_he": ["אום אל פחם", "אום-אל-פחם"],
+      "aliases_en": ["Umm al-Fahm", "Umm el-Fahm", "Umm al Fahm"],
+      "wikipedia_he": "אום_אל-פחם"
+    },
+    {
+      "canonical_he": "טירה",
+      "canonical_en": "Tira",
+      "aliases_he": [],
+      "aliases_en": ["Tira", "Tirah"],
+      "wikipedia_he": "טירה_(ישראל)"
+    },
+    {
+      "canonical_he": "סח׳נין",
+      "canonical_en": "Sakhnin",
+      "aliases_he": ["סח'נין", "סכנין"],
+      "aliases_en": ["Sakhnin", "Sachnin"],
+      "wikipedia_he": "סח׳נין"
+    },
+    {
+      "canonical_he": "רהט",
+      "canonical_en": "Rahat",
+      "aliases_he": [],
+      "aliases_en": ["Rahat"],
+      "wikipedia_he": "רהט"
+    }
+  ]
+}

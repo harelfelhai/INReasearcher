@@ -1,0 +1,209 @@
+{
+  "category": "ministry",
+  "version": "1.0.0",
+  "source_notes": "Curated list of standard Israeli government ministries. Some ministries (Negev/Galilee, Diaspora Affairs, Jerusalem Affairs) appear/disappear across governments — included here because they appear in the majority of recent governments.",
+  "category_labels_he": [
+    "משרד ממשלה",
+    "משרדי הממשלה",
+    "משרד ממשלתי",
+    "משרד",
+    "משרדים"
+  ],
+  "category_labels_en": [
+    "ministry",
+    "ministries",
+    "government ministry",
+    "israeli ministry"
+  ],
+  "entities": [
+    {
+      "canonical_he": "משרד ראש הממשלה",
+      "canonical_en": "Prime Minister's Office",
+      "aliases_he": ["ראש הממשלה", "מרה\"ם", "מרה״ם"],
+      "aliases_en": ["PMO", "Prime Minister Office"],
+      "wikipedia_he": "משרד_ראש_הממשלה_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד הביטחון",
+      "canonical_en": "Ministry of Defense",
+      "aliases_he": ["ביטחון", "המשרד לביטחון", "משרד הבטחון"],
+      "aliases_en": ["Defense", "Defence", "Ministry of Defence", "MoD"],
+      "wikipedia_he": "משרד_הביטחון"
+    },
+    {
+      "canonical_he": "משרד האוצר",
+      "canonical_en": "Ministry of Finance",
+      "aliases_he": ["אוצר", "האוצר"],
+      "aliases_en": ["Finance", "Treasury", "MoF"],
+      "wikipedia_he": "משרד_האוצר_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד החוץ",
+      "canonical_en": "Ministry of Foreign Affairs",
+      "aliases_he": ["חוץ", "משרד החוץ הישראלי"],
+      "aliases_en": ["Foreign Affairs", "Foreign Ministry", "MFA"],
+      "wikipedia_he": "משרד_החוץ_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד המשפטים",
+      "canonical_en": "Ministry of Justice",
+      "aliases_he": ["משפטים"],
+      "aliases_en": ["Justice"],
+      "wikipedia_he": "משרד_המשפטים_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד החינוך",
+      "canonical_en": "Ministry of Education",
+      "aliases_he": ["חינוך"],
+      "aliases_en": ["Education"],
+      "wikipedia_he": "משרד_החינוך_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד הבריאות",
+      "canonical_en": "Ministry of Health",
+      "aliases_he": ["בריאות"],
+      "aliases_en": ["Health"],
+      "wikipedia_he": "משרד_הבריאות_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד הפנים",
+      "canonical_en": "Ministry of Interior",
+      "aliases_he": ["פנים"],
+      "aliases_en": ["Interior"],
+      "wikipedia_he": "משרד_הפנים_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד התחבורה והבטיחות בדרכים",
+      "canonical_en": "Ministry of Transport and Road Safety",
+      "aliases_he": ["משרד התחבורה", "תחבורה"],
+      "aliases_en": ["Transportation", "Transport"],
+      "wikipedia_he": "משרד_התחבורה_והבטיחות_בדרכים"
+    },
+    {
+      "canonical_he": "משרד הכלכלה והתעשייה",
+      "canonical_en": "Ministry of Economy and Industry",
+      "aliases_he": ["משרד הכלכלה", "כלכלה ותעשייה", "כלכלה"],
+      "aliases_en": ["Economy", "Economy and Industry"],
+      "wikipedia_he": "משרד_הכלכלה_והתעשייה"
+    },
+    {
+      "canonical_he": "משרד העבודה",
+      "canonical_en": "Ministry of Labor",
+      "aliases_he": ["עבודה"],
+      "aliases_en": ["Labor", "Labour"],
+      "wikipedia_he": "משרד_העבודה_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד הרווחה והביטחון החברתי",
+      "canonical_en": "Ministry of Welfare and Social Security",
+      "aliases_he": ["משרד הרווחה", "רווחה", "רווחה וביטחון חברתי"],
+      "aliases_en": ["Welfare", "Welfare and Social Security"],
+      "wikipedia_he": "משרד_הרווחה_והביטחון_החברתי"
+    },
+    {
+      "canonical_he": "משרד החקלאות ופיתוח הכפר",
+      "canonical_en": "Ministry of Agriculture and Rural Development",
+      "aliases_he": ["משרד החקלאות", "חקלאות"],
+      "aliases_en": ["Agriculture"],
+      "wikipedia_he": "משרד_החקלאות_ופיתוח_הכפר"
+    },
+    {
+      "canonical_he": "משרד התיירות",
+      "canonical_en": "Ministry of Tourism",
+      "aliases_he": ["תיירות"],
+      "aliases_en": ["Tourism"],
+      "wikipedia_he": "משרד_התיירות_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד הבינוי והשיכון",
+      "canonical_en": "Ministry of Construction and Housing",
+      "aliases_he": ["משרד השיכון", "בינוי ושיכון", "שיכון"],
+      "aliases_en": ["Construction and Housing", "Housing"],
+      "wikipedia_he": "משרד_הבינוי_והשיכון"
+    },
+    {
+      "canonical_he": "משרד התקשורת",
+      "canonical_en": "Ministry of Communications",
+      "aliases_he": ["תקשורת"],
+      "aliases_en": ["Communications"],
+      "wikipedia_he": "משרד_התקשורת_(ישראל)"
+    },
+    {
+      "canonical_he": "משרד החדשנות, המדע והטכנולוגיה",
+      "canonical_en": "Ministry of Innovation, Science and Technology",
+      "aliases_he": ["משרד המדע", "משרד המדע והטכנולוגיה", "מדע וטכנולוגיה", "מדע"],
+      "aliases_en": ["Science", "Science and Technology", "Innovation"],
+      "wikipedia_he": "משרד_החדשנות,_המדע_והטכנולוגיה"
+    },
+    {
+      "canonical_he": "משרד האנרגיה והתשתיות",
+      "canonical_en": "Ministry of Energy and Infrastructure",
+      "aliases_he": ["משרד האנרגיה", "אנרגיה"],
+      "aliases_en": ["Energy", "Energy and Infrastructure"],
+      "wikipedia_he": "משרד_האנרגיה_(ישראל)"
+    },
+    {
+      "canonical_he": "המשרד להגנת הסביבה",
+      "canonical_en": "Ministry of Environmental Protection",
+      "aliases_he": ["משרד הסביבה", "הגנת הסביבה", "סביבה"],
+      "aliases_en": ["Environmental Protection", "Environment"],
+      "wikipedia_he": "המשרד_להגנת_הסביבה"
+    },
+    {
+      "canonical_he": "משרד התרבות והספורט",
+      "canonical_en": "Ministry of Culture and Sport",
+      "aliases_he": ["תרבות וספורט", "תרבות"],
+      "aliases_en": ["Culture and Sport", "Culture"],
+      "wikipedia_he": "משרד_התרבות_והספורט"
+    },
+    {
+      "canonical_he": "המשרד לשירותי דת",
+      "canonical_en": "Ministry of Religious Services",
+      "aliases_he": ["משרד הדתות", "שירותי דת", "דתות"],
+      "aliases_en": ["Religious Services", "Religious Affairs"],
+      "wikipedia_he": "המשרד_לשירותי_דת"
+    },
+    {
+      "canonical_he": "משרד העלייה והקליטה",
+      "canonical_en": "Ministry of Aliyah and Integration",
+      "aliases_he": ["משרד הקליטה", "קליטה", "עלייה וקליטה"],
+      "aliases_en": ["Aliyah and Integration", "Immigrant Absorption"],
+      "wikipedia_he": "משרד_העלייה_והקליטה"
+    },
+    {
+      "canonical_he": "המשרד לביטחון לאומי",
+      "canonical_en": "Ministry of National Security",
+      "aliases_he": ["משרד הביטחון הלאומי", "המשרד לביטחון פנים", "ביטחון פנים", "ביטחון לאומי"],
+      "aliases_en": ["National Security", "Public Security", "Internal Security"],
+      "wikipedia_he": "המשרד_לביטחון_לאומי"
+    },
+    {
+      "canonical_he": "משרד ירושלים ומורשת",
+      "canonical_en": "Ministry of Jerusalem Affairs and Heritage",
+      "aliases_he": ["ירושלים ומורשת", "משרד ירושלים"],
+      "aliases_en": ["Jerusalem Affairs and Heritage", "Jerusalem Affairs"],
+      "wikipedia_he": "משרד_ירושלים_ומורשת"
+    },
+    {
+      "canonical_he": "משרד השוויון החברתי",
+      "canonical_en": "Ministry for Social Equality",
+      "aliases_he": ["שוויון חברתי"],
+      "aliases_en": ["Social Equality"],
+      "wikipedia_he": "המשרד_לשוויון_חברתי"
+    },
+    {
+      "canonical_he": "משרד הנגב, הגליל והחוסן הלאומי",
+      "canonical_en": "Ministry of Negev, Galilee and National Resilience",
+      "aliases_he": ["משרד הנגב והגליל", "נגב וגליל"],
+      "aliases_en": ["Negev, Galilee and National Resilience", "Negev and Galilee"],
+      "wikipedia_he": "המשרד_לפיתוח_הפריפריה,_הנגב_והגליל"
+    },
+    {
+      "canonical_he": "משרד התפוצות והמאבק באנטישמיות",
+      "canonical_en": "Ministry of Diaspora Affairs and Combating Antisemitism",
+      "aliases_he": ["משרד התפוצות", "תפוצות"],
+      "aliases_en": ["Diaspora Affairs", "Diaspora"],
+      "wikipedia_he": "משרד_התפוצות_(ישראל)"
+    }
+  ]
+}
