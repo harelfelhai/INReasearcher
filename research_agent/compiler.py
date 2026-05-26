@@ -499,10 +499,20 @@ def compile_schema(
         "Create a bare column schema (no search queries yet).",
     )
 
-    columns = [
-        ColumnPlan(**{k: v for k, v in col.items() if v is not None})
-        for col in data["columns"]
-    ]
+    columns = []
+    for col in data["columns"]:
+        if not isinstance(col, dict):
+            print(f"    [compiler warning] skipping malformed column "
+                  f"(expected dict, got {type(col).__name__}): {col!r}")
+            continue
+        columns.append(
+            ColumnPlan(**{k: v for k, v in col.items() if v is not None})
+        )
+    if not columns:
+        raise ValueError(
+            "Compiler produced no valid columns — Claude tool output was "
+            "malformed. Try rephrasing the question or run again."
+        )
     plan = ResearchPlan(
         entity_type=data["entity_type"],
         research_question_original=research_question,
