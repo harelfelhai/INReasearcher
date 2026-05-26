@@ -785,7 +785,12 @@ def verify_probe_extraction(
     if field.type == "url":
         query = value
     else:
-        query = f'"{value}" {search_entity}'
+        query = f'"{value}"'
+        # Avoid '"X" X' when the probe value already IS the entity (common
+        # for person_name fields where the entity name is also the answer):
+        # Wikipedia's search API rejects redundant nested-quote queries.
+        if search_entity.lower() not in value.lower():
+            query += f" {search_entity}"
         if field.temporal_anchor:
             query += f" {field.temporal_anchor}"
 
@@ -1921,10 +1926,20 @@ class WikipediaSearchClient:
 
         titles = []
         try:
-            titles = self._api_get(base, search_params)["query"]["search"]
+            data = self._api_get(base, search_params)
+            if "query" not in data:
+                # Wikipedia returned an error envelope (e.g. invalid query
+                # syntax — happens with nested-quote queries like
+                # '"X" X' that probe-verify can produce). Surface what we
+                # got so it's debuggable, then proceed with no hits.
+                err = data.get("error", {}).get("info") or data.get("warnings") or data
+                print(f"    [wikipedia search error] no 'query' key in response: "
+                      f"{str(err)[:160]}")
+                return {"results": []}
+            titles = data["query"].get("search", [])
             titles = [r["title"] for r in titles]
         except Exception as exc:
-            print(f"    [wikipedia search error] {exc}")
+            print(f"    [wikipedia search error] {type(exc).__name__}: {exc}")
             return {"results": []}
 
         if not titles:
